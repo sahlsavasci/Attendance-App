@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
-import 'package:geolocator/geolocator.dart'; // Import package geolocator
+import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart';
 
 class AttendScreen extends StatefulWidget {
   final XFile? image;
@@ -12,7 +13,7 @@ class AttendScreen extends StatefulWidget {
 }
 
 class _AttendScreenState extends State<AttendScreen> {
-  // 1. Deklarasi Variabel Penampung Data Lokasi
+  // Variabel Penampung Data Lokasi
   bool isLoading = false;
   double dLat = 0.0;
   double dLong = 0.0;
@@ -21,7 +22,7 @@ class _AttendScreenState extends State<AttendScreen> {
   @override
   void initState() {
     super.initState();
-    // Otomatis mencari lokasi GPS saat halaman ini pertama kali dibuka
+    // Otomatis mencari lokasi GPS saat halaman pertama kali dibuka
     getGeoLocationPosition();
   }
 
@@ -31,7 +32,9 @@ class _AttendScreenState extends State<AttendScreen> {
   Future<bool> handleLocationPermission() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      _showSnackBar("Layanan GPS tidak aktif. Silakan aktifkan GPS perangkat Anda.", Icons.location_off);
+      _showSnackBar(
+          "Layanan GPS tidak aktif. Silakan aktifkan GPS perangkat Anda.",
+          Icons.location_off);
       return false;
     }
 
@@ -39,13 +42,16 @@ class _AttendScreenState extends State<AttendScreen> {
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
-        _showSnackBar("Izin akses lokasi ditolak.", Icons.warning_amber_rounded);
+        _showSnackBar(
+            "Izin akses lokasi ditolak.", Icons.warning_amber_rounded);
         return false;
       }
     }
 
     if (permission == LocationPermission.deniedForever) {
-      _showSnackBar("Izin lokasi ditolak permanen. Buka pengaturan aplikasi untuk mengizinkan.", Icons.error_outline);
+      _showSnackBar(
+          "Izin lokasi ditolak permanen. Buka pengaturan aplikasi untuk mengizinkan.",
+          Icons.error_outline);
       return false;
     }
 
@@ -66,10 +72,9 @@ class _AttendScreenState extends State<AttendScreen> {
       );
       dLat = position.latitude;
       dLong = position.longitude;
-      
+
       // Memanggil fungsi konversi koordinat ke nama alamat
       await getAddressFromLongLat(position);
-      
     } catch (e) {
       debugPrint("Error GPS: $e");
       if (mounted) {
@@ -82,15 +87,31 @@ class _AttendScreenState extends State<AttendScreen> {
   }
 
   // ==========================================
-  // Placeholder Fungsi Geocoding (Akan dibuat di langkah selanjutnya)
+  // 3. Reverse Geocoding & Konversi Koordinat ke Alamat Nyata
   // ==========================================
   Future<void> getAddressFromLongLat(Position position) async {
-    // Sementara kita isi teks dummy agar tidak error.
-    // Nanti akan kita isi dengan kode package 'geocoding'
-    setState(() {
-      strAlamat = "Koordinat didapatkan: ${position.latitude}, ${position.longitude}";
-      isLoading = false;
-    });
+    try {
+      List<Placemark> placemarks = await placemarkFromCoordinates(
+        position.latitude,
+        position.longitude,
+      );
+      if (placemarks.isNotEmpty && mounted) {
+        final place = placemarks[0];
+        setState(() {
+          strAlamat =
+              "${place.street ?? ''}, ${place.subLocality ?? ''}, ${place.locality ?? ''}, ${place.country ?? ''}"
+                  .replaceAll(RegExp(r'^[\s,]+|[\s,]+$'), '')
+                  .replaceAll(RegExp(r',\s*,+'), ',');
+          isLoading = false;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        strAlamat =
+            "Lat: ${position.latitude.toStringAsFixed(5)}, Long: ${position.longitude.toStringAsFixed(5)}";
+        isLoading = false;
+      });
+    }
   }
 
   // Fungsi pembantu untuk menampilkan pesan error/notifikasi
@@ -121,7 +142,7 @@ class _AttendScreenState extends State<AttendScreen> {
             // Menampilkan indikator loading jika GPS sedang mencari titik
             if (isLoading) const CircularProgressIndicator(),
             const SizedBox(height: 16),
-            
+
             // Menampilkan hasil teks alamat/koordinat
             Padding(
               padding: const EdgeInsets.all(16.0),
@@ -131,6 +152,12 @@ class _AttendScreenState extends State<AttendScreen> {
                 style: const TextStyle(fontSize: 16),
               ),
             ),
+            
+            const SizedBox(height: 24),
+            
+            // Tampilan sementara untuk menunjukkan data foto
+            if (widget.image != null)
+              Text('Wajah terdeteksi! Siap untuk dikirim.', style: TextStyle(color: Colors.green[700])),
           ],
         ),
       ),
