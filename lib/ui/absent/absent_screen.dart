@@ -3,6 +3,7 @@ import 'package:camera/camera.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:dotted_border/dotted_border.dart';
 import 'package:lottie/lottie.dart';
+
 // import 'attend_screen.dart'; // Aktifkan ini dan pastikan class AttendScreen Anda sudah ada
 
 class AbsentScreen extends StatefulWidget {
@@ -70,7 +71,7 @@ class _AbsentScreenState extends State<AbsentScreen> {
 
       if (!mounted) return;
       // Tutup dialog loading
-      Navigator.of(context, rootNavigator: true).pop(); 
+      Navigator.of(context, rootNavigator: true).pop();
 
       if (faces.isNotEmpty) {
         // Wajah asli terdeteksi -> Lanjut ke layar form konfirmasi presensi
@@ -83,9 +84,15 @@ class _AbsentScreenState extends State<AbsentScreen> {
           ),
         );
         */
-        _showSnackBar("Wajah Terdeteksi! Navigasi ke halaman form...", Icons.check_circle_outline);
+        _showSnackBar(
+          "Wajah Terdeteksi! Navigasi ke halaman form...",
+          Icons.check_circle_outline,
+        );
       } else {
-        _showSnackBar("Wajah tidak terdeteksi! Pastikan wajah terlihat jelas di bingkai.", Icons.warning_amber_rounded);
+        _showSnackBar(
+          "Wajah tidak terdeteksi! Pastikan wajah terlihat jelas di bingkai.",
+          Icons.warning_amber_rounded,
+        );
       }
     } catch (e) {
       isBusy = false;
@@ -108,10 +115,7 @@ class _AbsentScreenState extends State<AbsentScreen> {
             Icon(icon, color: Colors.white),
             const SizedBox(width: 8),
             Expanded(
-              child: Text(
-                message,
-                style: const TextStyle(color: Colors.white),
-              ),
+              child: Text(message, style: const TextStyle(color: Colors.white)),
             ),
           ],
         ),
@@ -125,7 +129,7 @@ class _AbsentScreenState extends State<AbsentScreen> {
   @override
   void dispose() {
     controller?.dispose(); // Lepaskan kamera dari memori
-    faceDetector.close();  // Hentikan proses ML Kit
+    faceDetector.close(); // Hentikan proses ML Kit
     super.dispose();
   }
 
@@ -180,7 +184,9 @@ class _AbsentScreenState extends State<AbsentScreen> {
                   child: Center(
                     child: FloatingActionButton.large(
                       onPressed: () async {
-                        if (controller != null && controller!.value.isInitialized && !isBusy) {
+                        if (controller != null &&
+                            controller!.value.isInitialized &&
+                            !isBusy) {
                           try {
                             // Munculkan loading dialog
                             showDialog(
@@ -192,23 +198,31 @@ class _AbsentScreenState extends State<AbsentScreen> {
                             );
 
                             // Tangkap gambar dari kamera
-                            final XFile imageFile = await controller!.takePicture();
-                            
+                            final XFile imageFile = await controller!
+                                .takePicture();
+
                             // Konversi ke InputImage untuk ML Kit
-                            final InputImage inputImage = InputImage.fromFilePath(imageFile.path);
+                            final InputImage inputImage =
+                                InputImage.fromFilePath(imageFile.path);
 
                             // Jalankan proses validasi wajah
                             await processImage(inputImage, imageFile);
                           } catch (e) {
-                            if (mounted) {
-                              Navigator.of(context, rootNavigator: true).pop();
-                              _showSnackBar("Error saat mengambil gambar: $e", Icons.error);
-                            }
+                            if (!context.mounted) return; // Gunakan context.mounted
+                            Navigator.of(context, rootNavigator: true).pop();
+                            _showSnackBar(
+                              "Error saat mengambil gambar: $e",
+                              Icons.error,
+                            );
                           }
                         }
                       },
                       backgroundColor: Colors.blueAccent,
-                      child: const Icon(Icons.camera_alt, color: Colors.white, size: 36),
+                      child: const Icon(
+                        Icons.camera_alt,
+                        color: Colors.white,
+                        size: 36,
+                      ),
                     ),
                   ),
                 ),

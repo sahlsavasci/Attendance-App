@@ -4,19 +4,16 @@ import 'package:attendance_app/ui/home_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
   try {
-    await Firebase.initializeApp(
-      options: const FirebaseOptions(
-        apiKey: 'AIzaSyDauGqKgEV6Q2yJMjFbaCbUNDk5FjGb0hc',
-        appId: '1:113228359740:android:c9363c7bec701353b93b39',
-        messagingSenderId: '113228359740',
-        projectId: 'idn-attendance-app-6ceac',
-      ),
-    );
+    // Inisialisasi Firebase tanpa hardcode API Key. 
+    // Ini akan otomatis memuat file google-services.json di Android
+    await Firebase.initializeApp();
     debugPrint("Firebase connected successfully!");
   } catch (e) {
     debugPrint("Firebase connection failed: $e");
   }
+
   runApp(const AttendanceApp());
 }
 

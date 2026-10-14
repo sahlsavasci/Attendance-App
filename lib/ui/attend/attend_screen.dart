@@ -1,4 +1,5 @@
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:geolocator/geolocator.dart';
@@ -31,7 +32,8 @@ class _AttendScreenState extends State<AttendScreen> {
   final TextEditingController nameController = TextEditingController();
 
   // Koneksi ke Koleksi Firestore
-  final CollectionReference dataCollection = FirebaseFirestore.instance.collection('attendance');
+  final CollectionReference dataCollection = FirebaseFirestore.instance
+      .collection('attendance');
 
   @override
   void initState() {
@@ -39,7 +41,10 @@ class _AttendScreenState extends State<AttendScreen> {
     getGeoLocationPosition();
     setStatusAbsen();
     // Mengambil tanggal dan waktu saat ini dengan format Hari, Tanggal Bulan Tahun Jam:Menit
-    strDateTime = DateFormat('EEEE, d MMMM yyyy HH:mm', 'id_ID').format(DateTime.now());
+    strDateTime = DateFormat(
+      'EEEE, d MMMM yyyy HH:mm',
+      'id_ID',
+    ).format(DateTime.now());
   }
 
   // ==========================================
@@ -51,12 +56,12 @@ class _AttendScreenState extends State<AttendScreen> {
     final dateMinutes = now.minute;
 
     if (dateHours < 8 || (dateHours == 8 && dateMinutes <= 30)) {
-      strStatus = "Attend";   // Tepat waktu (sebelum / pukul 08:30)
+      strStatus = "Attend"; // Tepat waktu (sebelum / pukul 08:30)
     } else if ((dateHours > 8 && dateHours < 18) ||
         (dateHours == 8 && dateMinutes >= 31)) {
-      strStatus = "Late";     // Terlambat (08:31 s/d 18:00)
+      strStatus = "Late"; // Terlambat (08:31 s/d 18:00)
     } else {
-      strStatus = "Leave";    // Di luar jam operasional
+      strStatus = "Leave"; // Di luar jam operasional
     }
   }
 
@@ -86,7 +91,7 @@ class _AttendScreenState extends State<AttendScreen> {
 
       if (!mounted) return;
       Navigator.of(context, rootNavigator: true).pop(); // Tutup Loader Dialog
-      
+
       _showSnackBar("Presensi berhasil dikirim!", Icons.check_circle_outline);
 
       // Kembali ke HomeScreen setelah sukses
@@ -131,14 +136,20 @@ class _AttendScreenState extends State<AttendScreen> {
   Future<bool> handleLocationPermission() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      _showSnackBar("Layanan GPS tidak aktif. Silakan aktifkan GPS.", Icons.location_off);
+      _showSnackBar(
+        "Layanan GPS tidak aktif. Silakan aktifkan GPS.",
+        Icons.location_off,
+      );
       return false;
     }
     LocationPermission permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
-        _showSnackBar("Izin akses lokasi ditolak.", Icons.warning_amber_rounded);
+        _showSnackBar(
+          "Izin akses lokasi ditolak.",
+          Icons.warning_amber_rounded,
+        );
         return false;
       }
     }
@@ -156,7 +167,9 @@ class _AttendScreenState extends State<AttendScreen> {
     setState(() => isLoading = true);
     try {
       Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
       );
       dLat = position.latitude;
       dLong = position.longitude;
@@ -173,19 +186,24 @@ class _AttendScreenState extends State<AttendScreen> {
 
   Future<void> getAddressFromLongLat(Position position) async {
     try {
-      List<Placemark> placemarks = await placemarkFromCoordinates(position.latitude, position.longitude);
+      List<Placemark> placemarks = await placemarkFromCoordinates(
+        position.latitude,
+        position.longitude,
+      );
       if (placemarks.isNotEmpty && mounted) {
         final place = placemarks[0];
         setState(() {
-          strAlamat = "${place.street ?? ''}, ${place.subLocality ?? ''}, ${place.locality ?? ''}, ${place.country ?? ''}"
-              .replaceAll(RegExp(r'^[\s,]+|[\s,]+$'), '')
-              .replaceAll(RegExp(r',\s*,+'), ',');
+          strAlamat =
+              "${place.street ?? ''}, ${place.subLocality ?? ''}, ${place.locality ?? ''}, ${place.country ?? ''}"
+                  .replaceAll(RegExp(r'^[\s,]+|[\s,]+$'), '')
+                  .replaceAll(RegExp(r',\s*,+'), ',');
           isLoading = false;
         });
       }
     } catch (e) {
       setState(() {
-        strAlamat = "Lat: ${position.latitude.toStringAsFixed(5)}, Long: ${position.longitude.toStringAsFixed(5)}";
+        strAlamat =
+            "Lat: ${position.latitude.toStringAsFixed(5)}, Long: ${position.longitude.toStringAsFixed(5)}";
         isLoading = false;
       });
     }
@@ -232,7 +250,7 @@ class _AttendScreenState extends State<AttendScreen> {
                 ),
                 child: const Icon(Icons.person, size: 80, color: Colors.grey),
               ),
-            
+
             const SizedBox(height: 24),
 
             // Card Info Waktu & Status
@@ -242,14 +260,19 @@ class _AttendScreenState extends State<AttendScreen> {
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
                   children: [
-                    Text("Waktu: $strDateTime", style: const TextStyle(fontWeight: FontWeight.bold)),
+                    Text(
+                      "Waktu: $strDateTime",
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
                     const SizedBox(height: 8),
                     Text(
-                      "Status: $strStatus", 
+                      "Status: $strStatus",
                       style: TextStyle(
-                        fontSize: 18, 
+                        fontSize: 18,
                         fontWeight: FontWeight.bold,
-                        color: strStatus == "Attend" ? Colors.green : Colors.red,
+                        color: strStatus == "Attend"
+                            ? Colors.green
+                            : Colors.red,
                       ),
                     ),
                   ],
@@ -260,11 +283,15 @@ class _AttendScreenState extends State<AttendScreen> {
             const SizedBox(height: 16),
 
             // Indikator Lokasi
-            isLoading 
+            isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : ListTile(
                     contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.location_on, color: Colors.red, size: 36),
+                    leading: const Icon(
+                      Icons.location_on,
+                      color: Colors.red,
+                      size: 36,
+                    ),
                     title: const Text("Lokasi Anda saat ini:"),
                     subtitle: Text(strAlamat),
                   ),
@@ -285,16 +312,22 @@ class _AttendScreenState extends State<AttendScreen> {
 
             // Tombol Submit
             ElevatedButton(
-              onPressed: isLoading 
-                ? null 
-                : () => submitAbsen(strAlamat, nameController.text, strStatus),
+              onPressed: isLoading
+                  ? null
+                  : () =>
+                        submitAbsen(strAlamat, nameController.text, strStatus),
               style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 backgroundColor: Colors.blueAccent,
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
-              child: const Text("KIRIM PRESENSI", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              child: const Text(
+                "KIRIM PRESENSI",
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
             ),
           ],
         ),
