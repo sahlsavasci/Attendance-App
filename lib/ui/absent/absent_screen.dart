@@ -1,10 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:camera/camera.dart';
-import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
-import 'package:dotted_border/dotted_border.dart';
-import 'package:lottie/lottie.dart';
-
-// import 'attend_screen.dart'; // Aktifkan ini dan pastikan class AttendScreen Anda sudah ada
+import 'package:intl/intl.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class AbsentScreen extends StatefulWidget {
   const AbsentScreen({super.key});
@@ -14,223 +10,193 @@ class AbsentScreen extends StatefulWidget {
 }
 
 class _AbsentScreenState extends State<AbsentScreen> {
-  // Variabel untuk Kamera
-  CameraController? controller;
-  bool isCameraReady = false;
+  // Controller untuk input form
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _fromController = TextEditingController();
+  final TextEditingController _untilController = TextEditingController();
+  
+  // Variabel untuk Dropdown Kategori
+  String dropDownValue = "Sakit";
+  var categories = ["Sakit", "Izin", "Lainnya"];
 
-  // Variabel untuk ML Kit Face Detection
-  bool isBusy = false;
-  final FaceDetector faceDetector = FaceDetector(
-    options: FaceDetectorOptions(
-      enableContours: true,
-      enableClassification: true,
-    ),
-  );
-
-  @override
-  void initState() {
-    super.initState();
-    initializeCamera();
-  }
+  bool isLoading = false;
+  
+  // Koneksi ke Firestore
+  final CollectionReference dataCollection = FirebaseFirestore.instance.collection('attendance');
 
   // ==========================================
-  // 1. Inisialisasi Kamera Depan
+  // 1. Pemilih Tanggal Interaktif
   // ==========================================
-  Future<void> initializeCamera() async {
-    final cameras = await availableCameras();
-    final frontCamera = cameras.firstWhere(
-      (camera) => camera.lensDirection == CameraLensDirection.front,
-      orElse: () => cameras.first,
+  Future<void> _pickDate(TextEditingController controller) async {
+    final DateTime? pickedDate = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now(),
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
     );
 
-    controller = CameraController(
-      frontCamera,
-      ResolutionPreset.high,
-      enableAudio: false, // Hemat memori, tidak butuh audio untuk foto
-      imageFormatGroup: ImageFormatGroup.jpeg,
-    );
-
-    try {
-      await controller!.initialize();
-      if (mounted) setState(() => isCameraReady = true);
-    } catch (e) {
-      debugPrint("Failed to initialize camera: $e");
+    if (pickedDate != null) {
+      setState(() {
+        controller.text = DateFormat('dd/MM/yyyy').format(pickedDate);
+      });
     }
   }
 
   // ==========================================
-  // 2. Pemrosesan Citra & Validasi Wajah AI
+  // 2. Fungsi Pengiriman Izin ke Firestore
   // ==========================================
-  Future<void> processImage(InputImage inputImage, XFile imageFile) async {
-    if (isBusy) return;
-    isBusy = true;
+  Future<void> submitPermission(String nama, String keterangan, String from, String until) async {
+    // Validasi form kosong
+    if (nama.isEmpty || from.isEmpty || until.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Harap lengkapi semua data form!")),
+      );
+      return;
+    }
+
+    setState(() => isLoading = true);
 
     try {
-      final faces = await faceDetector.processImage(inputImage);
-      isBusy = false;
+      await dataCollection.add({
+        'name': nama.trim(),
+        'address': '-', // Tidak butuh lokasi GPS untuk izin
+        'description': keterangan, // Kategori (Sakit/Izin)
+        'datetime': '$from - $until', // Rentang Tanggal
+        'type': 'permission', // Penanda bahwa ini bukan absen hadir
+        'created_at': FieldValue.serverTimestamp(),
+      });
 
       if (!mounted) return;
-      // Tutup dialog loading
-      Navigator.of(context, rootNavigator: true).pop();
-
-      if (faces.isNotEmpty) {
-        // Wajah asli terdeteksi -> Lanjut ke layar form konfirmasi presensi
-        // Hapus komentar pada navigasi di bawah ini jika AttendScreen sudah dibuat:
-        /*
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (context) => AttendScreen(image: imageFile),
-          ),
-        );
-        */
-        _showSnackBar(
-          "Wajah Terdeteksi! Navigasi ke halaman form...",
-          Icons.check_circle_outline,
-        );
-      } else {
-        _showSnackBar(
-          "Wajah tidak terdeteksi! Pastikan wajah terlihat jelas di bingkai.",
-          Icons.warning_amber_rounded,
-        );
-      }
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Pengajuan izin berhasil dikirim!")),
+      );
+      
+      // Kembali ke layar sebelumnya (HomeScreen)
+      Navigator.pop(context);
     } catch (e) {
-      isBusy = false;
-      if (mounted) {
-        Navigator.of(context, rootNavigator: true).pop();
-        _showSnackBar("Gagal memproses deteksi wajah: $e", Icons.error_outline);
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Gagal mengirim izin: $e")),
+      );
+    } finally {
+      if (mounted) setState(() => isLoading = false);
     }
   }
 
-  // ==========================================
-  // Fungsi Pembantu: Menampilkan Pesan SnackBar
-  // ==========================================
-  void _showSnackBar(String message, IconData icon) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        backgroundColor: Colors.blueGrey[900],
-        content: Row(
-          children: [
-            Icon(icon, color: Colors.white),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(message, style: const TextStyle(color: Colors.white)),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ==========================================
-  // 3. Pembersihan Resource (Dispose)
-  // ==========================================
   @override
   void dispose() {
-    controller?.dispose(); // Lepaskan kamera dari memori
-    faceDetector.close(); // Hentikan proses ML Kit
+    _nameController.dispose();
+    _fromController.dispose();
+    _untilController.dispose();
     super.dispose();
   }
 
   // ==========================================
-  // Tampilan Antarmuka (UI)
+  // Antarmuka (UI) Form Izin
   // ==========================================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Presensi Kehadiran'),
+        title: const Text("Formulir Izin & Sakit"),
         backgroundColor: Colors.blueAccent,
+        foregroundColor: Colors.white,
       ),
-      body: isCameraReady && controller != null
-          ? Stack(
-              fit: StackFit.expand,
-              children: [
-                // Layer 1 (Bawah): Tampilan Kamera Realtime
-                CameraPreview(controller!),
-
-                // Layer 2 (Atas): Overlay Animasi Scanner Lottie & DottedBorder
-                Center(
-                  child: DottedBorder(
-                    borderType: BorderType.RRect,
-                    radius: const Radius.circular(24),
-                    dashPattern: const [8, 4],
-                    color: Colors.blueAccent,
-                    strokeWidth: 2,
-                    child: SizedBox(
-                      width: 260,
-                      height: 340,
-                      child: Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          Lottie.asset(
-                            'assets/raw/face_id_ring.json',
-                            width: 240,
-                            height: 240,
-                            fit: BoxFit.contain,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-
-                // Layer 3 (Paling Atas): Tombol Ambil Gambar
-                Positioned(
-                  bottom: 40,
-                  left: 0,
-                  right: 0,
-                  child: Center(
-                    child: FloatingActionButton.large(
-                      onPressed: () async {
-                        if (controller != null &&
-                            controller!.value.isInitialized &&
-                            !isBusy) {
-                          try {
-                            // Munculkan loading dialog
-                            showDialog(
-                              context: context,
-                              barrierDismissible: false,
-                              builder: (context) => const Center(
-                                child: CircularProgressIndicator(),
-                              ),
-                            );
-
-                            // Tangkap gambar dari kamera
-                            final XFile imageFile = await controller!
-                                .takePicture();
-
-                            // Konversi ke InputImage untuk ML Kit
-                            final InputImage inputImage =
-                                InputImage.fromFilePath(imageFile.path);
-
-                            // Jalankan proses validasi wajah
-                            await processImage(inputImage, imageFile);
-                          } catch (e) {
-                            if (!context.mounted) return; // Gunakan context.mounted
-                            Navigator.of(context, rootNavigator: true).pop();
-                            _showSnackBar(
-                              "Error saat mengambil gambar: $e",
-                              Icons.error,
-                            );
-                          }
-                        }
-                      },
-                      backgroundColor: Colors.blueAccent,
-                      child: const Icon(
-                        Icons.camera_alt,
-                        color: Colors.white,
-                        size: 36,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            )
-          : const Center(
-              child: CircularProgressIndicator(color: Colors.blueAccent),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              "Silakan lengkapi formulir di bawah ini untuk mengajukan perizinan.",
+              style: TextStyle(fontSize: 16),
             ),
+            const SizedBox(height: 24),
+            
+            // Input Nama
+            TextField(
+              controller: _nameController,
+              decoration: const InputDecoration(
+                labelText: 'Nama Lengkap',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.person),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Dropdown Kategori (Sakit / Izin)
+            DropdownButtonFormField<String>(
+              value: dropDownValue,
+              decoration: const InputDecoration(
+                labelText: 'Kategori',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.category),
+              ),
+              items: categories.map((String category) {
+                return DropdownMenuItem(
+                  value: category,
+                  child: Text(category),
+                );
+              }).toList(),
+              onChanged: (String? newValue) {
+                setState(() {
+                  dropDownValue = newValue!;
+                });
+              },
+            ),
+            const SizedBox(height: 16),
+
+            // Rentang Waktu (Dari)
+            TextField(
+              controller: _fromController,
+              readOnly: true,
+              onTap: () => _pickDate(_fromController),
+              decoration: const InputDecoration(
+                labelText: 'Mulai Tanggal',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.calendar_today),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Rentang Waktu (Sampai)
+            TextField(
+              controller: _untilController,
+              readOnly: true,
+              onTap: () => _pickDate(_untilController),
+              decoration: const InputDecoration(
+                labelText: 'Sampai Tanggal',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.event),
+              ),
+            ),
+            const SizedBox(height: 32),
+
+            // Tombol Kirim
+            ElevatedButton(
+              onPressed: isLoading
+                  ? null
+                  : () {
+                      submitPermission(
+                        _nameController.text,
+                        dropDownValue,
+                        _fromController.text,
+                        _untilController.text,
+                      );
+                    },
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                backgroundColor: Colors.blueAccent,
+                foregroundColor: Colors.white,
+              ),
+              child: isLoading
+                  ? const CircularProgressIndicator(color: Colors.white)
+                  : const Text("KIRIM PENGAJUAN", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
