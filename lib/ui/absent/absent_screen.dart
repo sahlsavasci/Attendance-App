@@ -127,7 +127,7 @@ class _AbsentScreenState extends State<AbsentScreen> {
 
             // Dropdown Kategori (Sakit / Izin)
             DropdownButtonFormField<String>(
-              value: dropDownValue,
+              initialValue: dropDownValue,
               decoration: const InputDecoration(
                 labelText: 'Kategori',
                 border: OutlineInputBorder(),
