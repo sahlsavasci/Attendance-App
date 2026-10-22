@@ -66,5 +66,11 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Aplikasi memerlukan izin lokasi untuk memverifikasi posisi presensi Anda.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Aplikasi memerlukan izin kamera untuk mengambil foto selfie kehadiran.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Aplikasi memerlukan izin galeri untuk memilih foto bukti kehadiran.</string>
 </dict>
 </plist>

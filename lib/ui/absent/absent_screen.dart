@@ -10,191 +10,356 @@ class AbsentScreen extends StatefulWidget {
 }
 
 class _AbsentScreenState extends State<AbsentScreen> {
-  // Controller untuk input form
   final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _fromController = TextEditingController();
-  final TextEditingController _untilController = TextEditingController();
+  final TextEditingController _reasonController = TextEditingController();
   
-  // Variabel untuk Dropdown Kategori
-  String dropDownValue = "Sakit";
-  var categories = ["Sakit", "Izin", "Lainnya"];
+  DateTime? _startDate;
+  DateTime? _endDate;
 
-  bool isLoading = false;
+  String _selectedCategory = "Sakit";
+  final List<String> _categories = ["Sakit", "Izin", "Lainnya"];
+
+  bool _isLoading = false;
   
-  // Koneksi ke Firestore
-  final CollectionReference dataCollection = FirebaseFirestore.instance.collection('attendance');
+  final CollectionReference _dataCollection =
+      FirebaseFirestore.instance.collection('attendance');
 
-  // ==========================================
-  // 1. Pemilih Tanggal Interaktif
-  // ==========================================
-  Future<void> _pickDate(TextEditingController controller) async {
-    final DateTime? pickedDate = await showDatePicker(
+  @override
+  void initState() {
+    super.initState();
+    _startDate = DateTime.now();
+    _endDate = DateTime.now();
+  }
+
+  String _formatDate(DateTime? date) {
+    if (date == null) return "Pilih tanggal";
+    try {
+      return DateFormat('dd MMMM yyyy', 'id_ID').format(date);
+    } catch (_) {
+      return DateFormat('dd/MM/yyyy').format(date);
+    }
+  }
+
+  Future<void> _pickStartDate() async {
+    final picked = await showDatePicker(
       context: context,
-      initialDate: DateTime.now(),
-      firstDate: DateTime(2020),
-      lastDate: DateTime(2100),
+      initialDate: _startDate ?? DateTime.now(),
+      firstDate: DateTime(2023),
+      lastDate: DateTime(2030),
+      helpText: "PILIH TANGGAL MULAI IZIN",
     );
-
-    if (pickedDate != null) {
+    if (picked != null) {
       setState(() {
-        controller.text = DateFormat('dd/MM/yyyy').format(pickedDate);
+        _startDate = picked;
+        if (_endDate != null && _endDate!.isBefore(_startDate!)) {
+          _endDate = _startDate;
+        }
       });
     }
   }
 
-  // ==========================================
-  // 2. Fungsi Pengiriman Izin ke Firestore
-  // ==========================================
-  Future<void> submitPermission(String nama, String keterangan, String from, String until) async {
-    // Validasi form kosong
-    if (nama.isEmpty || from.isEmpty || until.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Harap lengkapi semua data form!")),
-      );
+  Future<void> _pickEndDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _endDate ?? _startDate ?? DateTime.now(),
+      firstDate: _startDate ?? DateTime(2023),
+      lastDate: DateTime(2030),
+      helpText: "PILIH TANGGAL SELESAI IZIN",
+    );
+    if (picked != null) {
+      setState(() {
+        _endDate = picked;
+      });
+    }
+  }
+
+  Future<void> _submitPermission() async {
+    final name = _nameController.text.trim();
+    final reason = _reasonController.text.trim();
+
+    if (name.isEmpty) {
+      _showSnackBar("Harap isi nama lengkap Anda!", Icons.warning_amber_rounded);
       return;
     }
 
-    setState(() => isLoading = true);
+    if (_startDate == null || _endDate == null) {
+      _showSnackBar("Harap tentukan tanggal mulai dan selesai izin!", Icons.warning_amber_rounded);
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    final startStr = DateFormat('dd/MM/yyyy').format(_startDate!);
+    final endStr = DateFormat('dd/MM/yyyy').format(_endDate!);
+    final dateRangeStr = startStr == endStr ? startStr : "$startStr - $endStr";
+
+    final descriptionText = reason.isNotEmpty
+        ? "$_selectedCategory: $reason"
+        : _selectedCategory;
 
     try {
-      await dataCollection.add({
-        'name': nama.trim(),
-        'address': '-', // Tidak butuh lokasi GPS untuk izin
-        'description': keterangan, // Kategori (Sakit/Izin)
-        'datetime': '$from - $until', // Rentang Tanggal
-        'type': 'permission', // Penanda bahwa ini bukan absen hadir
+      await _dataCollection.add({
+        'name': name,
+        'address': '-',
+        'description': descriptionText,
+        'datetime': dateRangeStr,
+        'type': 'permission',
+        'category': _selectedCategory,
+        'reason': reason,
+        'start_date': Timestamp.fromDate(_startDate!),
+        'end_date': Timestamp.fromDate(_endDate!),
         'created_at': FieldValue.serverTimestamp(),
       });
 
       if (!mounted) return;
-      
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Pengajuan izin berhasil dikirim!")),
-      );
-      
-      // Kembali ke layar sebelumnya (HomeScreen)
+      _showSnackBar("Pengajuan izin berhasil tersimpan!", Icons.check_circle_outline);
       Navigator.pop(context);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Gagal mengirim izin: $e")),
-      );
+      _showSnackBar("Gagal mengirim pengajuan izin: $e", Icons.error_outline);
     } finally {
-      if (mounted) setState(() => isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  void _showSnackBar(String message, IconData icon) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        content: Row(
+          children: [
+            Icon(icon, color: Colors.white, size: 20),
+            const SizedBox(width: 10),
+            Expanded(child: Text(message)),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
   void dispose() {
     _nameController.dispose();
-    _fromController.dispose();
-    _untilController.dispose();
+    _reasonController.dispose();
     super.dispose();
   }
 
-  // ==========================================
-  // Antarmuka (UI) Form Izin
-  // ==========================================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
-        title: const Text("Formulir Izin & Sakit"),
-        backgroundColor: Colors.blueAccent,
-        foregroundColor: Colors.white,
+        title: const Text("Pengajuan Izin & Sakit"),
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(
-              "Silakan lengkapi formulir di bawah ini untuk mengajukan perizinan.",
-              style: TextStyle(fontSize: 16),
-            ),
-            const SizedBox(height: 24),
-            
-            // Input Nama
-            TextField(
-              controller: _nameController,
-              decoration: const InputDecoration(
-                labelText: 'Nama Lengkap',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.person),
-              ),
-            ),
-            const SizedBox(height: 16),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 640),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 20.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Info Card
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEFF6FF),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: const Color(0xFFBFDBFE)),
+                  ),
+                  child: const Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.info_outline, color: Color(0xFF2563EB), size: 20),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          "Pengajuan izin atau sakit akan diverifikasi oleh wali kelas dan tercatat di riwayat kehadiran XI RPL.",
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF1E3A8A),
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
 
-            // Dropdown Kategori (Sakit / Izin)
-            DropdownButtonFormField<String>(
-              initialValue: dropDownValue,
-              decoration: const InputDecoration(
-                labelText: 'Kategori',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.category),
-              ),
-              items: categories.map((String category) {
-                return DropdownMenuItem(
-                  value: category,
-                  child: Text(category),
-                );
-              }).toList(),
-              onChanged: (String? newValue) {
-                setState(() {
-                  dropDownValue = newValue!;
-                });
-              },
-            ),
-            const SizedBox(height: 16),
+                const SizedBox(height: 20),
 
-            // Rentang Waktu (Dari)
-            TextField(
-              controller: _fromController,
-              readOnly: true,
-              onTap: () => _pickDate(_fromController),
-              decoration: const InputDecoration(
-                labelText: 'Mulai Tanggal',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.calendar_today),
-              ),
-            ),
-            const SizedBox(height: 16),
+                // 1. Input Nama Lengkap
+                const Text(
+                  "NAMA SISWA",
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF64748B), letterSpacing: 0.6),
+                ),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: _nameController,
+                  decoration: const InputDecoration(
+                    hintText: "Nama lengkap sesuai presensi",
+                    prefixIcon: Icon(Icons.person_outline, color: Color(0xFF64748B)),
+                  ),
+                ),
 
-            // Rentang Waktu (Sampai)
-            TextField(
-              controller: _untilController,
-              readOnly: true,
-              onTap: () => _pickDate(_untilController),
-              decoration: const InputDecoration(
-                labelText: 'Sampai Tanggal',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.event),
-              ),
-            ),
-            const SizedBox(height: 32),
+                const SizedBox(height: 20),
 
-            // Tombol Kirim
-            ElevatedButton(
-              onPressed: isLoading
-                  ? null
-                  : () {
-                      submitPermission(
-                        _nameController.text,
-                        dropDownValue,
-                        _fromController.text,
-                        _untilController.text,
-                      );
-                    },
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                backgroundColor: Colors.blueAccent,
-                foregroundColor: Colors.white,
-              ),
-              child: isLoading
-                  ? const CircularProgressIndicator(color: Colors.white)
-                  : const Text("KIRIM PENGAJUAN", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                // 2. Kategori Izin (Segmented Buttons)
+                const Text(
+                  "KATEGORI PERIZINAN",
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF64748B), letterSpacing: 0.6),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: _categories.map((category) {
+                    final isSelected = _selectedCategory == category;
+                    return Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(10),
+                          onTap: () => setState(() => _selectedCategory = category),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            decoration: BoxDecoration(
+                              color: isSelected ? const Color(0xFF1E2B58) : Colors.white,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: isSelected ? const Color(0xFF1E2B58) : const Color(0xFFCBD5E1),
+                              ),
+                            ),
+                            alignment: Alignment.center,
+                            child: Text(
+                              category,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: isSelected ? Colors.white : const Color(0xFF334155),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+
+                const SizedBox(height: 20),
+
+                // 3. Rentang Waktu
+                const Text(
+                  "RENTANG WAKTU IZIN",
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF64748B), letterSpacing: 0.6),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: InkWell(
+                        onTap: _pickStartDate,
+                        borderRadius: BorderRadius.circular(12),
+                        child: Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFFE2E8F0)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Row(
+                                children: [
+                                  Icon(Icons.calendar_today, size: 14, color: Color(0xFF2563EB)),
+                                  SizedBox(width: 6),
+                                  Text("Mulai", style: TextStyle(fontSize: 11, color: Color(0xFF64748B), fontWeight: FontWeight.w600)),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                _formatDate(_startDate),
+                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF0F172A)),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: InkWell(
+                        onTap: _pickEndDate,
+                        borderRadius: BorderRadius.circular(12),
+                        child: Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFFE2E8F0)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Row(
+                                children: [
+                                  Icon(Icons.event, size: 14, color: Color(0xFF2563EB)),
+                                  SizedBox(width: 6),
+                                  Text("Sampai", style: TextStyle(fontSize: 11, color: Color(0xFF64748B), fontWeight: FontWeight.w600)),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                _formatDate(_endDate),
+                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF0F172A)),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 20),
+
+                // 4. Keterangan / Alasan
+                const Text(
+                  "KETERANGAN / ALASAN (OPSIONAL)",
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF64748B), letterSpacing: 0.6),
+                ),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: _reasonController,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    hintText: "Tuliskan alasan izin atau diagnosis sakit...",
+                  ),
+                ),
+
+                const SizedBox(height: 32),
+
+                // Tombol Kirim
+                ElevatedButton(
+                  onPressed: _isLoading ? null : _submitPermission,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1E2B58),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                  ),
+                  child: _isLoading
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                        )
+                      : const Text(
+                          "KIRIM PENGAJUAN IZIN",
+                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, letterSpacing: 0.3),
+                        ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
