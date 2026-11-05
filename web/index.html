@@ -41,6 +41,50 @@
     For more details:
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
+  <!--
+    Deteksi wajah untuk versi browser. ML Kit tidak tersedia di web, jadi dipakai
+    MediaPipe Face Detector (model BlazeFace yang sama dengan ML Kit).
+    Dipanggil dari lib/utils/face_detection/face_check_web.dart.
+  -->
+  <script>
+    (function () {
+      const MP_VERSION = "0.10.14";
+      const MP_BASE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@" + MP_VERSION;
+      const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite";
+      let detectorPromise = null;
+
+      function getDetector() {
+        if (!detectorPromise) {
+          detectorPromise = (async () => {
+            const vision = await import(MP_BASE + "/vision_bundle.mjs");
+            const fileset = await vision.FilesetResolver.forVisionTasks(MP_BASE + "/wasm");
+            return vision.FaceDetector.createFromOptions(fileset, {
+              baseOptions: { modelAssetPath: MODEL_URL, delegate: "CPU" },
+              runningMode: "IMAGE",
+              minDetectionConfidence: 0.5,
+            });
+          })().catch((err) => {
+            detectorPromise = null; // izinkan coba lagi, misalnya setelah internet kembali
+            throw err;
+          });
+        }
+        return detectorPromise;
+      }
+
+      window.faceCheckWarmUp = function () {
+        return getDetector().then(() => true);
+      };
+
+      window.faceCheckCount = async function (imageUrl) {
+        const detector = await getDetector();
+        const img = new Image();
+        img.src = imageUrl;
+        await img.decode();
+        return detector.detect(img).detections.length;
+      };
+    })();
+  </script>
+
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

@@ -6,6 +6,8 @@ import 'package:geocoding/geocoding.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 
+import 'face_scan_screen.dart';
+
 class AttendScreen extends StatefulWidget {
   final XFile? image;
 
@@ -94,37 +96,17 @@ class _AttendScreenState extends State<AttendScreen> {
   // ==========================================
   // 2. Akses Kamera / Pengambilan Foto Selfie
   // ==========================================
+  // Membuka layar scan wajah (webcam di laptop, kamera depan di HP).
+  // Foto hanya dikembalikan jika terdeteksi tepat satu wajah.
   Future<void> _pickSelfiePhoto() async {
-    final ImagePicker picker = ImagePicker();
-    try {
-      final XFile? photo = await picker.pickImage(
-        source: ImageSource.camera,
-        preferredCameraDevice: CameraDevice.front,
-        maxWidth: 1024,
-        maxHeight: 1024,
-        imageQuality: 85,
-      );
+    final XFile? photo = await Navigator.push<XFile>(
+      context,
+      MaterialPageRoute(builder: (_) => const FaceScanScreen()),
+    );
 
-      if (photo != null) {
-        _selectedImage = photo;
-        await _loadImageBytes(photo);
-      }
-    } catch (e) {
-      // Fallback untuk browser jika camera tidak dapat diakses langsung via ImageSource.camera
-      try {
-        final XFile? photo = await picker.pickImage(
-          source: ImageSource.gallery,
-          maxWidth: 1024,
-          maxHeight: 1024,
-          imageQuality: 85,
-        );
-        if (photo != null) {
-          _selectedImage = photo;
-          await _loadImageBytes(photo);
-        }
-      } catch (err) {
-        _showSnackBar("Tidak dapat mengakses kamera: $err", Icons.error_outline);
-      }
+    if (photo != null) {
+      _selectedImage = photo;
+      await _loadImageBytes(photo);
     }
   }
 
