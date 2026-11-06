@@ -9,18 +9,35 @@ class AttendanceHistoryScreen extends StatefulWidget {
 }
 
 class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
+  static const _navy = Color(0xFF1E2B58);
+  static const _filters = ['Semua', 'Attend', 'Late', 'Izin', 'Sakit'];
+
   final CollectionReference dataCollection =
       FirebaseFirestore.instance.collection('attendance');
 
-  String _searchQuery = "";
-  String _selectedFilter = "Semua";
-  final List<String> _filters = ["Semua", "Attend", "Late", "Izin", "Sakit"];
+  // Stream dibuat sekali. Jika dibuat di build(), setiap ketikan di kolom
+  // pencarian akan membuka ulang koneksi Firestore dan daftar berkedip.
+  late final Stream<QuerySnapshot> _attendanceStream;
 
-  final TextEditingController _searchController = TextEditingController();
+  final TextEditingController searchController = TextEditingController();
+  String selectedFilter = 'Semua';
+
+  String get _searchQuery => searchController.text.trim().toLowerCase();
+
+  @override
+  void initState() {
+    super.initState();
+    _attendanceStream = dataCollection.snapshots();
+    // Rebuild saat teks berubah, termasuk saat dikosongkan lewat tombol clear.
+    searchController.addListener(_onSearchChanged);
+  }
+
+  void _onSearchChanged() => setState(() {});
 
   @override
   void dispose() {
-    _searchController.dispose();
+    searchController.removeListener(_onSearchChanged);
+    searchController.dispose();
     super.dispose();
   }
 
@@ -39,18 +56,56 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
     return colors[hash % colors.length];
   }
 
+  // Warna teks status dipilih yang cukup gelap agar terbaca di atas latar pucat.
   Color _getStatusColor(String description) {
     final lower = description.toLowerCase();
     if (lower.contains('attend') || lower.contains('hadir') || lower.contains('tepat')) {
-      return const Color(0xFF10B981); // Emerald
+      return const Color(0xFF047857); // Emerald
     } else if (lower.contains('late') || lower.contains('terlambat')) {
-      return const Color(0xFFF59E0B); // Amber
+      return const Color(0xFFB45309); // Amber
     } else if (lower.contains('leave') || lower.contains('luar')) {
-      return const Color(0xFFEF4444); // Red
+      return const Color(0xFFB91C1C); // Red
     } else if (lower.contains('sakit') || lower.contains('izin')) {
-      return const Color(0xFF2563EB); // Royal Blue
+      return const Color(0xFF1D4ED8); // Royal Blue
     }
-    return const Color(0xFF64748B);
+    return const Color(0xFF475569);
+  }
+
+  bool _matchesSearch(Map<String, dynamic> data) {
+    if (_searchQuery.isEmpty) return true;
+    final name = (data['name']?.toString() ?? '').toLowerCase();
+    return name.contains(_searchQuery);
+  }
+
+  bool _matchesFilter(Map<String, dynamic> data) {
+    if (selectedFilter == 'Semua') return true;
+
+    final desc = (data['description']?.toString() ?? '').trim().toLowerCase();
+    final isPermission = data['type'] == 'permission';
+
+    switch (selectedFilter) {
+      case 'Attend':
+        return !isPermission &&
+            (desc.contains('attend') || desc.contains('hadir') || desc.contains('tepat'));
+      case 'Late':
+        return !isPermission && (desc.contains('late') || desc.contains('terlambat'));
+      case 'Izin':
+      case 'Sakit':
+        // Keterangan izin berformat "Kategori: alasan". Dicocokkan di awal teks
+        // agar "Sakit: izin ke dokter" tidak ikut masuk filter Izin.
+        return desc.startsWith(selectedFilter.toLowerCase());
+      default:
+        return true;
+    }
+  }
+
+  void _showSnackBar(ScaffoldMessengerState messenger, String message) {
+    messenger.showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text(message),
+      ),
+    );
   }
 
   void _showEditDialog(String docId, Map<String, dynamic> currentData) {
@@ -58,105 +113,129 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
     final addressController = TextEditingController(text: currentData['address']?.toString() ?? '');
     final descriptionController = TextEditingController(text: currentData['description']?.toString() ?? '');
     final datetimeController = TextEditingController(text: currentData['datetime']?.toString() ?? '');
+    final messenger = ScaffoldMessenger.of(context);
+    var isSaving = false;
 
     showDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('Edit Catatan Presensi', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameController,
-                  decoration: const InputDecoration(labelText: 'Nama Lengkap'),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: descriptionController,
-                  decoration: const InputDecoration(labelText: 'Status / Keterangan'),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: datetimeController,
-                  decoration: const InputDecoration(labelText: 'Waktu / Tanggal'),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: addressController,
-                  maxLines: 2,
-                  decoration: const InputDecoration(labelText: 'Alamat Lokasi'),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Batal', style: TextStyle(color: Color(0xFF64748B))),
-            ),
-            ElevatedButton(
-              onPressed: () async {
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            Future<void> save() async {
+              if (nameController.text.trim().isEmpty) {
+                _showSnackBar(messenger, 'Nama lengkap tidak boleh kosong.');
+                return;
+              }
+              setDialogState(() => isSaving = true);
+              try {
                 await dataCollection.doc(docId).update({
                   'name': nameController.text.trim(),
                   'address': addressController.text.trim(),
                   'description': descriptionController.text.trim(),
                   'datetime': datetimeController.text.trim(),
                 });
-                if (!context.mounted) return;
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    behavior: SnackBarBehavior.floating,
-                    content: Text('Data berhasil diperbarui!'),
-                  ),
-                );
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF1E2B58),
+                if (dialogContext.mounted) Navigator.pop(dialogContext);
+                _showSnackBar(messenger, 'Data berhasil diperbarui!');
+              } catch (e) {
+                if (dialogContext.mounted) setDialogState(() => isSaving = false);
+                _showSnackBar(messenger, 'Gagal memperbarui data: $e');
+              }
+            }
+
+            return AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: const Text('Edit Catatan Presensi', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: nameController,
+                      decoration: const InputDecoration(labelText: 'Nama Lengkap'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: descriptionController,
+                      decoration: const InputDecoration(labelText: 'Status / Keterangan'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: datetimeController,
+                      decoration: const InputDecoration(labelText: 'Waktu / Tanggal'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: addressController,
+                      maxLines: 2,
+                      decoration: const InputDecoration(labelText: 'Alamat Lokasi'),
+                    ),
+                  ],
+                ),
               ),
-              child: const Text('Simpan Perubahan'),
-            ),
-          ],
+              actions: [
+                TextButton(
+                  onPressed: isSaving ? null : () => Navigator.pop(dialogContext),
+                  child: const Text('Batal', style: TextStyle(color: Color(0xFF475569))),
+                ),
+                ElevatedButton(
+                  onPressed: isSaving ? null : save,
+                  style: ElevatedButton.styleFrom(backgroundColor: _navy),
+                  child: Text(isSaving ? 'Menyimpan…' : 'Simpan Perubahan'),
+                ),
+              ],
+            );
+          },
         );
       },
-    );
+    ).then((_) {
+      nameController.dispose();
+      addressController.dispose();
+      descriptionController.dispose();
+      datetimeController.dispose();
+    });
   }
 
   void _showDeleteDialog(String docId) {
+    final messenger = ScaffoldMessenger.of(context);
+    var isDeleting = false;
+
     showDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('Hapus Catatan?', style: TextStyle(fontWeight: FontWeight.bold)),
-          content: const Text(
-            'Apakah Anda yakin ingin menghapus data presensi ini? Tindakan ini permanen dan tidak dapat dibatalkan.',
-            style: TextStyle(color: Color(0xFF475569), height: 1.4),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Batal', style: TextStyle(color: Color(0xFF64748B))),
-            ),
-            ElevatedButton(
-              onPressed: () async {
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            Future<void> delete() async {
+              setDialogState(() => isDeleting = true);
+              try {
                 await dataCollection.doc(docId).delete();
-                if (!context.mounted) return;
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    behavior: SnackBarBehavior.floating,
-                    content: Text('Data berhasil dihapus dari sistem!'),
-                  ),
-                );
-              },
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFEF4444)),
-              child: const Text('Ya, Hapus Data'),
-            ),
-          ],
+                if (dialogContext.mounted) Navigator.pop(dialogContext);
+                _showSnackBar(messenger, 'Data berhasil dihapus dari sistem!');
+              } catch (e) {
+                if (dialogContext.mounted) setDialogState(() => isDeleting = false);
+                _showSnackBar(messenger, 'Gagal menghapus data: $e');
+              }
+            }
+
+            return AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: const Text('Hapus Catatan?', style: TextStyle(fontWeight: FontWeight.bold)),
+              content: const Text(
+                'Apakah Anda yakin ingin menghapus data presensi ini? Tindakan ini permanen dan tidak dapat dibatalkan.',
+                style: TextStyle(color: Color(0xFF475569), height: 1.4),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isDeleting ? null : () => Navigator.pop(dialogContext),
+                  child: const Text('Batal', style: TextStyle(color: Color(0xFF475569))),
+                ),
+                ElevatedButton(
+                  onPressed: isDeleting ? null : delete,
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFB91C1C)),
+                  child: Text(isDeleting ? 'Menghapus…' : 'Ya, Hapus Data'),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -174,184 +253,194 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
           constraints: const BoxConstraints(maxWidth: 680),
           child: Column(
             children: [
-              // Search & Filter Header
-              Container(
-                color: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
-                child: Column(
-                  children: [
-                    // Search bar
-                    TextField(
-                      controller: _searchController,
-                      onChanged: (val) => setState(() => _searchQuery = val.trim().toLowerCase()),
-                      decoration: InputDecoration(
-                        hintText: "Cari nama siswa...",
-                        prefixIcon: const Icon(Icons.search, size: 20, color: Color(0xFF64748B)),
-                        suffixIcon: _searchQuery.isNotEmpty
-                            ? IconButton(
-                                icon: const Icon(Icons.clear, size: 18),
-                                onPressed: () {
-                                  _searchController.clear();
-                                  setState(() => _searchQuery = "");
-                                },
-                              )
-                            : null,
-                        contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    // Filter Chips
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: _filters.map((filter) {
-                          final isSelected = _selectedFilter == filter;
-                          return Padding(
-                            padding: const EdgeInsets.only(right: 6.0),
-                            child: FilterChip(
-                              label: Text(filter),
-                              selected: isSelected,
-                              onSelected: (_) => setState(() => _selectedFilter = filter),
-                              selectedColor: const Color(0xFF1E2B58),
-                              labelStyle: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: isSelected ? Colors.white : const Color(0xFF475569),
-                              ),
-                              backgroundColor: const Color(0xFFF1F5F9),
-                              showCheckmark: false,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(20),
-                                side: BorderSide(
-                                  color: isSelected ? const Color(0xFF1E2B58) : const Color(0xFFE2E8F0),
-                                ),
-                              ),
-                            ),
-                          );
-                        }).toList(),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
+              _buildSearchAndFilter(),
               const Divider(height: 1, color: Color(0xFFE2E8F0)),
-
-              // Stream List
-              Expanded(
-                child: StreamBuilder<QuerySnapshot>(
-                  stream: dataCollection.snapshots(),
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return const Center(
-                        child: CircularProgressIndicator(color: Color(0xFF1E2B58)),
-                      );
-                    }
-
-                    if (snapshot.hasError) {
-                      return Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(24.0),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const Icon(Icons.cloud_off, size: 48, color: Color(0xFFEF4444)),
-                              const SizedBox(height: 12),
-                              Text(
-                                "Gagal memuat data: ${snapshot.error}",
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(color: Color(0xFF475569)),
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    }
-
-                    if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                      return const Center(
-                        child: Padding(
-                          padding: EdgeInsets.all(32.0),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.inbox_outlined, size: 56, color: Color(0xFF94A3B8)),
-                              SizedBox(height: 12),
-                              Text(
-                                "Belum Ada Catatan Presensi",
-                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF334155)),
-                              ),
-                              SizedBox(height: 6),
-                              Text(
-                                "Presensi yang terekam akan muncul di halaman ini secara real-time.",
-                                textAlign: TextAlign.center,
-                                style: TextStyle(fontSize: 13, color: Color(0xFF64748B)),
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    }
-
-                    // Sort data by created_at safely
-                    final docs = List<QueryDocumentSnapshot>.from(snapshot.data!.docs);
-                    docs.sort((a, b) {
-                      final dataA = a.data() as Map<String, dynamic>? ?? {};
-                      final dataB = b.data() as Map<String, dynamic>? ?? {};
-                      final timeA = dataA['created_at'] as Timestamp?;
-                      final timeB = dataB['created_at'] as Timestamp?;
-                      if (timeA != null && timeB != null) {
-                        return timeB.compareTo(timeA);
-                      }
-                      return 0;
-                    });
-
-                    // Filter based on search query and category
-                    final filteredDocs = docs.where((doc) {
-                      final data = doc.data() as Map<String, dynamic>? ?? {};
-                      final name = (data['name']?.toString() ?? '').toLowerCase();
-                      final desc = (data['description']?.toString() ?? '').toLowerCase();
-
-                      final matchesSearch = _searchQuery.isEmpty || name.contains(_searchQuery);
-
-                      if (!matchesSearch) return false;
-
-                      if (_selectedFilter == "Semua") return true;
-                      return desc.contains(_selectedFilter.toLowerCase());
-                    }).toList();
-
-                    if (filteredDocs.isEmpty) {
-                      return const Center(
-                        child: Padding(
-                          padding: EdgeInsets.all(24.0),
-                          child: Text(
-                            "Tidak ada data presensi yang sesuai dengan pencarian.",
-                            style: TextStyle(color: Color(0xFF64748B)),
-                          ),
-                        ),
-                      );
-                    }
-
-                    return ListView.builder(
-                      padding: const EdgeInsets.all(16),
-                      itemCount: filteredDocs.length,
-                      itemBuilder: (context, index) {
-                        final doc = filteredDocs[index];
-                        final data = doc.data() as Map<String, dynamic>? ?? {};
-                        final docId = doc.id;
-                        final name = data['name']?.toString() ?? 'Siswa';
-                        final address = data['address']?.toString() ?? '-';
-                        final description = data['description']?.toString() ?? '-';
-                        final datetime = data['datetime']?.toString() ?? '-';
-
-                        return _buildAttendanceCard(docId, name, address, description, datetime, data);
-                      },
-                    );
-                  },
-                ),
-              ),
+              Expanded(child: _buildHistoryList()),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSearchAndFilter() {
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+      child: Column(
+        children: [
+          TextField(
+            controller: searchController,
+            textInputAction: TextInputAction.search,
+            decoration: InputDecoration(
+              hintText: 'Cari nama siswa...',
+              prefixIcon: const Icon(Icons.search, size: 20, color: Color(0xFF64748B)),
+              suffixIcon: searchController.text.isNotEmpty
+                  ? IconButton(
+                      tooltip: 'Hapus pencarian',
+                      icon: const Icon(Icons.clear, size: 18),
+                      onPressed: searchController.clear,
+                    )
+                  : null,
+              contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
+            ),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 40,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: _filters.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 6),
+              itemBuilder: (context, index) {
+                final filter = _filters[index];
+                final isSelected = selectedFilter == filter;
+                return ChoiceChip(
+                  label: Text(filter),
+                  selected: isSelected,
+                  onSelected: (_) => setState(() => selectedFilter = filter),
+                  selectedColor: _navy,
+                  backgroundColor: const Color(0xFFF1F5F9),
+                  showCheckmark: false,
+                  labelStyle: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: isSelected ? Colors.white : const Color(0xFF475569),
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                    side: BorderSide(
+                      color: isSelected ? _navy : const Color(0xFFCBD5E1),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHistoryList() {
+    return StreamBuilder<QuerySnapshot>(
+      stream: _attendanceStream,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return _buildMessage(
+            icon: Icons.cloud_off,
+            iconColor: const Color(0xFFB91C1C),
+            title: 'Gagal memuat data',
+            body: 'Periksa koneksi internet, lalu buka ulang halaman ini.\n${snapshot.error}',
+          );
+        }
+
+        if (!snapshot.hasData) {
+          return const Center(
+            child: CircularProgressIndicator(color: _navy),
+          );
+        }
+
+        final docs = List<QueryDocumentSnapshot>.from(snapshot.data!.docs);
+        if (docs.isEmpty) {
+          return _buildMessage(
+            icon: Icons.inbox_outlined,
+            title: 'Belum Ada Catatan Presensi',
+            body: 'Presensi yang terekam akan muncul di halaman ini secara real-time.',
+          );
+        }
+
+        // Urutkan terbaru di atas. Data yang baru dikirim belum punya created_at
+        // dari server, jadi ditaruh paling atas.
+        docs.sort((a, b) {
+          final timeA = (a.data() as Map<String, dynamic>?)?['created_at'] as Timestamp?;
+          final timeB = (b.data() as Map<String, dynamic>?)?['created_at'] as Timestamp?;
+          if (timeA == null && timeB == null) return 0;
+          if (timeA == null) return -1;
+          if (timeB == null) return 1;
+          return timeB.compareTo(timeA);
+        });
+
+        final filteredDocs = docs.where((doc) {
+          final data = doc.data() as Map<String, dynamic>? ?? {};
+          return _matchesSearch(data) && _matchesFilter(data);
+        }).toList();
+
+        if (filteredDocs.isEmpty) {
+          return _buildMessage(
+            icon: Icons.search_off,
+            title: 'Tidak ada yang cocok',
+            body: _emptyFilterMessage(),
+            action: TextButton(
+              onPressed: () {
+                searchController.clear();
+                setState(() => selectedFilter = 'Semua');
+              },
+              child: const Text('Tampilkan semua catatan'),
+            ),
+          );
+        }
+
+        return ListView.builder(
+          padding: const EdgeInsets.all(16),
+          itemCount: filteredDocs.length,
+          itemBuilder: (context, index) {
+            final doc = filteredDocs[index];
+            final data = doc.data() as Map<String, dynamic>? ?? {};
+            final name = data['name']?.toString() ?? 'Siswa';
+            final address = data['address']?.toString() ?? '-';
+            final description = data['description']?.toString() ?? '-';
+            final datetime = data['datetime']?.toString() ?? '-';
+
+            return _buildAttendanceCard(doc.id, name, address, description, datetime, data);
+          },
+        );
+      },
+    );
+  }
+
+  String _emptyFilterMessage() {
+    final query = searchController.text.trim();
+    if (query.isNotEmpty && selectedFilter != 'Semua') {
+      return 'Tidak ada catatan "$selectedFilter" atas nama "$query".';
+    }
+    if (query.isNotEmpty) {
+      return 'Tidak ada catatan atas nama "$query".';
+    }
+    return 'Belum ada catatan dengan status "$selectedFilter".';
+  }
+
+  Widget _buildMessage({
+    required IconData icon,
+    required String title,
+    required String body,
+    Color iconColor = const Color(0xFF94A3B8),
+    Widget? action,
+  }) {
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(32.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 52, color: iconColor),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF334155)),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              body,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 13, height: 1.4, color: Color(0xFF475569)),
+            ),
+            if (action != null) ...[
+              const SizedBox(height: 12),
+              action,
+            ],
+          ],
         ),
       ),
     );
@@ -373,13 +462,6 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: const Color(0xFFE2E8F0)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.02),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
       ),
       child: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -393,7 +475,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                   radius: 20,
                   backgroundColor: _getAvatarColor(name),
                   child: Text(
-                    name.isNotEmpty ? name[0].toUpperCase() : '?',
+                    name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : '?',
                     style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
                   ),
                 ),
@@ -414,9 +496,9 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                         decoration: BoxDecoration(
-                          color: statusColor.withValues(alpha: 0.12),
+                          color: statusColor.withValues(alpha: 0.08),
                           borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: statusColor.withValues(alpha: 0.3)),
+                          border: Border.all(color: statusColor.withValues(alpha: 0.4)),
                         ),
                         child: Text(
                           description,
@@ -434,13 +516,13 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     IconButton(
-                      tooltip: "Edit Presensi",
-                      icon: const Icon(Icons.edit_outlined, color: Color(0xFF2563EB), size: 19),
+                      tooltip: 'Edit Presensi',
+                      icon: const Icon(Icons.edit_outlined, color: Color(0xFF1D4ED8), size: 20),
                       onPressed: () => _showEditDialog(docId, rawData),
                     ),
                     IconButton(
-                      tooltip: "Hapus Presensi",
-                      icon: const Icon(Icons.delete_outline, color: Color(0xFFEF4444), size: 19),
+                      tooltip: 'Hapus Presensi',
+                      icon: const Icon(Icons.delete_outline, color: Color(0xFFB91C1C), size: 20),
                       onPressed: () => _showDeleteDialog(docId),
                     ),
                   ],
