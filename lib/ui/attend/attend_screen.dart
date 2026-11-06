@@ -6,12 +6,15 @@ import 'package:geocoding/geocoding.dart';
 import 'package:intl/intl.dart';
 
 import '../../models/attendance_model.dart';
+import '../../models/user_model.dart';
 import '../../services/attendance_service.dart';
+import '../../services/auth_service.dart';
 
 class AttendScreen extends StatefulWidget {
   final XFile? image;
+  final UserModel? currentUser;
 
-  const AttendScreen({super.key, this.image});
+  const AttendScreen({super.key, this.image, this.currentUser});
 
   @override
   State<AttendScreen> createState() => _AttendScreenState();
@@ -41,11 +44,12 @@ class _AttendScreenState extends State<AttendScreen> {
   String strStatus = 'Attend';
   String strDateTime = '';
 
-  // Controller untuk input nama
-  final TextEditingController nameController = TextEditingController();
+  // Identitas Terkunci (Identity Locking)
+  UserModel? _lockedUser;
 
-  // Service Layer untuk interaksi Firestore
+  // Service Layer untuk interaksi Firestore & Auth
   final AttendanceService _attendanceService = AttendanceService();
+  final AuthService _authService = AuthService();
 
   bool get _canSubmitAttendance =>
       isWithinRadius || (kIsWeb && isWebTestingBypass);
@@ -53,6 +57,11 @@ class _AttendScreenState extends State<AttendScreen> {
   @override
   void initState() {
     super.initState();
+    _lockedUser = widget.currentUser;
+    if (_lockedUser == null) {
+      _loadLockedUser();
+    }
+
     capturedImage = widget.image;
     if (capturedImage != null) {
       _loadImageBytes(capturedImage!);
@@ -61,6 +70,13 @@ class _AttendScreenState extends State<AttendScreen> {
     _updateCurrentTime();
     setStatusAbsen();
     getGeoLocationPosition();
+  }
+
+  Future<void> _loadLockedUser() async {
+    final profile = await _authService.getCurrentUserProfile();
+    if (mounted && profile != null) {
+      setState(() => _lockedUser = profile);
+    }
   }
 
   Future<void> _loadImageBytes(XFile file) async {
@@ -131,9 +147,9 @@ class _AttendScreenState extends State<AttendScreen> {
   }
 
   // ==========================================
-  // 3. Pengiriman Payload melalui AttendanceService
+  // 3. Pengiriman Payload melalui AttendanceService (Identity Locked)
   // ==========================================
-  Future<void> submitAbsen(String alamat, String nama, String status) async {
+  Future<void> submitAbsen(String alamat, String status) async {
     if (!_canSubmitAttendance) {
       _showSnackBar(
         'Presensi ditolak: Anda berada di luar area sekolah!',
@@ -147,9 +163,9 @@ class _AttendScreenState extends State<AttendScreen> {
       return;
     }
 
-    final trimmedName = nama.trim();
-    if (trimmedName.isEmpty) {
-      _showSnackBar('Nama lengkap tidak boleh kosong!', Icons.warning_amber_rounded);
+    final user = _lockedUser ?? await _authService.getCurrentUserProfile();
+    if (user == null) {
+      _showSnackBar('Sesi pengguna tidak ditemukan. Silakan masuk kembali.', Icons.error_outline);
       return;
     }
 
@@ -158,7 +174,11 @@ class _AttendScreenState extends State<AttendScreen> {
 
     final attendance = AttendanceModel(
       id: '',
-      name: trimmedName,
+      userId: user.uid,
+      nis: user.nis,
+      studentClass: user.userClass,
+      approvalStatus: 'approved',
+      name: user.name,
       description: status,
       address: alamat.isEmpty ? 'Lokasi tidak terekam' : alamat,
       datetime: strDateTime,
@@ -199,7 +219,7 @@ class _AttendScreenState extends State<AttendScreen> {
             padding: EdgeInsets.symmetric(vertical: 16),
             child: Row(
               children: [
-                CircularProgressIndicator(color: Color(0xFF1E2B58)),
+                CircularProgressIndicator(color: Color(0xFF2952F2)),
                 SizedBox(width: 20),
                 Expanded(
                   child: Text(
@@ -242,10 +262,6 @@ class _AttendScreenState extends State<AttendScreen> {
       schoolLng,
     );
     final within = distance <= maxAllowedDistanceMeters;
-
-    // Pada platform Web, lokasi berbasis IP/Wi-Fi sering kali memiliki akurasi rendah (>100m).
-    // Aktifkan mode graceful testing secara otomatis di Web jika akurasi tidak presisi,
-    // atau tampilkan opsi simulasi agar tidak memblokir pengujian di laptop.
     final lowAccuracyWeb = kIsWeb && (accuracy == null || accuracy > 100);
 
     setState(() {
@@ -316,7 +332,6 @@ class _AttendScreenState extends State<AttendScreen> {
     final hasPermission = await handleLocationPermission();
     if (!hasPermission) {
       if (kIsWeb) {
-        // Fallback graceful untuk Web saat izin lokasi tidak tersedia di browser testing
         _useSchoolCoordinatesForWebTesting();
         return;
       }
@@ -361,8 +376,6 @@ class _AttendScreenState extends State<AttendScreen> {
   }
 
   Future<void> getAddressFromLongLat(Position position) async {
-    // Pada Flutter Web, geocoding native plugin tidak didukung.
-    // Gunakan fallback koordinat yang bersih agar tidak memicu PlatformException.
     if (kIsWeb) {
       setState(() {
         strAlamat =
@@ -405,12 +418,6 @@ class _AttendScreenState extends State<AttendScreen> {
     }
   }
 
-  @override
-  void dispose() {
-    nameController.dispose();
-    super.dispose();
-  }
-
   Color _getStatusColor() {
     switch (strStatus) {
       case 'Attend':
@@ -441,6 +448,78 @@ class _AttendScreenState extends State<AttendScreen> {
     return 'Jarak: $rounded meter - Di Luar Radius';
   }
 
+  Widget _buildLockedIdentityCard() {
+    final name = _lockedUser?.name ?? 'Memuat profil...';
+    final nis = _lockedUser?.nis ?? '-';
+    final userClass = _lockedUser?.userClass ?? 'XI RPL';
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE8EEFF), width: 1.2),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: const BoxDecoration(
+              color: Color(0xFFE8EEFF),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.verified_user_rounded,
+              color: Color(0xFF2952F2),
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'IDENTITAS TERKUNCI OTOMATIS',
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.6,
+                    color: Color(0xFF2952F2),
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  name,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF0E1A2B),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'NIS: $nis • Kelas: $userClass',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF5B6474),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Icon(
+            Icons.lock_outline_rounded,
+            size: 18,
+            color: Color(0xFF5B6474),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildGeofenceBadge() {
     if (isLoadingLocation) {
       return const Padding(
@@ -457,8 +536,8 @@ class _AttendScreenState extends State<AttendScreen> {
     }
 
     final Color badgeColor = isWithinRadius
-        ? const Color(0xFF047857) // Hijau
-        : const Color(0xFFB91C1C); // Merah
+        ? const Color(0xFF047857)
+        : const Color(0xFFB91C1C);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -544,7 +623,7 @@ class _AttendScreenState extends State<AttendScreen> {
                     const Spacer(),
                     Switch(
                       value: isWebTestingBypass,
-                      activeThumbColor: const Color(0xFF1E2B58),
+                      activeThumbColor: const Color(0xFF2952F2),
                       onChanged: (val) => setState(() => isWebTestingBypass = val),
                     ),
                   ],
@@ -562,31 +641,36 @@ class _AttendScreenState extends State<AttendScreen> {
     final statusColor = _getStatusColor();
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: const Color(0xFFF2F4F7),
       appBar: AppBar(
         title: const Text('Konfirmasi Presensi'),
       ),
       body: Center(
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 640),
+          constraints: const BoxConstraints(maxWidth: 480),
           child: SingleChildScrollView(
             padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 20.0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // 1. Box Preview Foto Selfie
+                // 1. Kartu Identitas Terkunci (Menggantikan input manual nama)
+                _buildLockedIdentityCard(),
+
+                const SizedBox(height: 16),
+
+                // 2. Box Preview Foto Selfie
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
                     color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: const Color(0xFFE2E8F0)),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFFE8EEFF), width: 1.2),
                   ),
                   child: Column(
                     children: [
                       if (capturedImage != null && (kIsWeb || _imageBytes != null))
                         ClipRRect(
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(14),
                           child: kIsWeb
                               ? Image.network(
                                   capturedImage!.path,
@@ -607,10 +691,10 @@ class _AttendScreenState extends State<AttendScreen> {
                           width: double.infinity,
                           padding: const EdgeInsets.symmetric(horizontal: 16),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFF1F5F9),
-                            borderRadius: BorderRadius.circular(12),
+                            color: const Color(0xFFF8FAFC),
+                            borderRadius: BorderRadius.circular(14),
                             border: Border.all(
-                              color: const Color(0xFFCBD5E1),
+                              color: const Color(0xFFE8EEFF),
                               style: BorderStyle.solid,
                             ),
                           ),
@@ -652,9 +736,9 @@ class _AttendScreenState extends State<AttendScreen> {
                         icon: const Icon(Icons.camera_alt, size: 18),
                         label: Text(capturedImage == null ? 'Ambil Foto Selfie' : 'Ganti Foto'),
                         style: OutlinedButton.styleFrom(
-                          foregroundColor: const Color(0xFF1E2B58),
-                          side: const BorderSide(color: Color(0xFF1E2B58)),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          foregroundColor: const Color(0xFF2952F2),
+                          side: const BorderSide(color: Color(0xFF2952F2)),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                         ),
                       ),
                     ],
@@ -663,13 +747,13 @@ class _AttendScreenState extends State<AttendScreen> {
 
                 const SizedBox(height: 16),
 
-                // 2. Status Kehadiran & Waktu Realtime
+                // 3. Status Kehadiran & Waktu Realtime
                 Container(
                   padding: const EdgeInsets.all(16.0),
                   decoration: BoxDecoration(
                     color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: const Color(0xFFE2E8F0)),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFFE8EEFF), width: 1.2),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -683,7 +767,7 @@ class _AttendScreenState extends State<AttendScreen> {
                               fontSize: 11,
                               fontWeight: FontWeight.w700,
                               letterSpacing: 0.6,
-                              color: Color(0xFF475569),
+                              color: Color(0xFF5B6474),
                             ),
                           ),
                           Container(
@@ -707,7 +791,7 @@ class _AttendScreenState extends State<AttendScreen> {
                       const Divider(height: 20),
                       Row(
                         children: [
-                          const Icon(Icons.schedule, size: 18, color: Color(0xFF2563EB)),
+                          const Icon(Icons.schedule, size: 18, color: Color(0xFF2952F2)),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
@@ -715,7 +799,7 @@ class _AttendScreenState extends State<AttendScreen> {
                               style: const TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
-                                color: Color(0xFF1E293B),
+                                color: Color(0xFF0E1A2B),
                               ),
                             ),
                           ),
@@ -727,13 +811,13 @@ class _AttendScreenState extends State<AttendScreen> {
 
                 const SizedBox(height: 16),
 
-                // 3. Card Lokasi GPS & Geofencing dengan Tombol Refresh
+                // 4. Card Lokasi GPS & Geofencing dengan Tombol Refresh
                 Container(
                   padding: const EdgeInsets.all(16.0),
                   decoration: BoxDecoration(
                     color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: const Color(0xFFE2E8F0)),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFFE8EEFF), width: 1.2),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -743,14 +827,14 @@ class _AttendScreenState extends State<AttendScreen> {
                         children: [
                           const Row(
                             children: [
-                              Icon(Icons.location_on, color: Color(0xFFEF4444), size: 20),
+                              Icon(Icons.location_on, color: Color(0xFFD92D20), size: 20),
                               SizedBox(width: 6),
                               Text(
                                 'Lokasi Presensi Anda',
                                 style: TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w700,
-                                  color: Color(0xFF1E293B),
+                                  color: Color(0xFF0E1A2B),
                                 ),
                               ),
                             ],
@@ -764,7 +848,7 @@ class _AttendScreenState extends State<AttendScreen> {
                                     height: 16,
                                     child: CircularProgressIndicator(strokeWidth: 2),
                                   )
-                                : const Icon(Icons.refresh, size: 20, color: Color(0xFF2563EB)),
+                                : const Icon(Icons.refresh, size: 20, color: Color(0xFF2952F2)),
                           ),
                         ],
                       ),
@@ -773,7 +857,7 @@ class _AttendScreenState extends State<AttendScreen> {
                         strAlamat,
                         style: const TextStyle(
                           fontSize: 12,
-                          color: Color(0xFF475569),
+                          color: Color(0xFF5B6474),
                           height: 1.4,
                         ),
                       ),
@@ -782,32 +866,19 @@ class _AttendScreenState extends State<AttendScreen> {
                   ),
                 ),
 
-                const SizedBox(height: 20),
+                const SizedBox(height: 24),
 
-                // 4. Input Nama Lengkap
-                TextField(
-                  controller: nameController,
-                  textInputAction: TextInputAction.done,
-                  decoration: const InputDecoration(
-                    labelText: 'Nama Lengkap Siswa',
-                    hintText: 'Masukkan nama sesuai absensi',
-                    prefixIcon: Icon(Icons.badge_outlined, color: Color(0xFF64748B)),
-                  ),
-                ),
-
-                const SizedBox(height: 28),
-
-                // 5. Tombol Submit Presensi (Diproteksi Geofencing)
+                // 5. Tombol Submit Presensi (Diproteksi Geofencing & Identity Locked)
                 ElevatedButton(
                   onPressed: (isLoadingLocation || isSubmitting || !_canSubmitAttendance)
                       ? null
-                      : () => submitAbsen(strAlamat, nameController.text, strStatus),
+                      : () => submitAbsen(strAlamat, strStatus),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1E2B58),
+                    backgroundColor: const Color(0xFF2952F2),
                     disabledBackgroundColor: const Color(0xFFCBD5E1),
                     disabledForegroundColor: const Color(0xFF64748B),
                     padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                   ),
                   child: Text(
                     _canSubmitAttendance

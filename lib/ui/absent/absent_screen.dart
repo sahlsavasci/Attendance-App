@@ -2,17 +2,20 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../models/attendance_model.dart';
+import '../../models/user_model.dart';
 import '../../services/attendance_service.dart';
+import '../../services/auth_service.dart';
 
 class AbsentScreen extends StatefulWidget {
-  const AbsentScreen({super.key});
+  final UserModel? currentUser;
+
+  const AbsentScreen({super.key, this.currentUser});
 
   @override
   State<AbsentScreen> createState() => _AbsentScreenState();
 }
 
 class _AbsentScreenState extends State<AbsentScreen> {
-  final TextEditingController _nameController = TextEditingController();
   final TextEditingController _reasonController = TextEditingController();
 
   DateTime? _startDate;
@@ -22,14 +25,27 @@ class _AbsentScreenState extends State<AbsentScreen> {
   final List<String> _categories = ['Sakit', 'Izin', 'Lainnya'];
 
   bool _isLoading = false;
+  UserModel? _lockedUser;
 
   final AttendanceService _attendanceService = AttendanceService();
+  final AuthService _authService = AuthService();
 
   @override
   void initState() {
     super.initState();
+    _lockedUser = widget.currentUser;
+    if (_lockedUser == null) {
+      _loadLockedUser();
+    }
     _startDate = DateTime.now();
     _endDate = DateTime.now();
+  }
+
+  Future<void> _loadLockedUser() async {
+    final profile = await _authService.getCurrentUserProfile();
+    if (mounted && profile != null) {
+      setState(() => _lockedUser = profile);
+    }
   }
 
   String _formatDate(DateTime? date) {
@@ -75,16 +91,16 @@ class _AbsentScreenState extends State<AbsentScreen> {
   }
 
   Future<void> submitPermission() async {
-    final name = _nameController.text.trim();
     final reason = _reasonController.text.trim();
-
-    if (name.isEmpty) {
-      _showSnackBar('Harap isi nama lengkap Anda!', Icons.warning_amber_rounded);
-      return;
-    }
 
     if (_startDate == null || _endDate == null) {
       _showSnackBar('Harap tentukan tanggal mulai dan selesai izin!', Icons.warning_amber_rounded);
+      return;
+    }
+
+    final user = _lockedUser ?? await _authService.getCurrentUserProfile();
+    if (user == null) {
+      _showSnackBar('Sesi pengguna tidak ditemukan. Silakan masuk kembali.', Icons.error_outline);
       return;
     }
 
@@ -100,7 +116,11 @@ class _AbsentScreenState extends State<AbsentScreen> {
 
     final permission = AttendanceModel(
       id: '',
-      name: name,
+      userId: user.uid,
+      nis: user.nis,
+      studentClass: user.userClass,
+      approvalStatus: 'pending',
+      name: user.name,
       description: descriptionText,
       address: '-',
       datetime: dateRangeStr,
@@ -113,7 +133,7 @@ class _AbsentScreenState extends State<AbsentScreen> {
       await _attendanceService.submitPermission(permission);
 
       if (!mounted) return;
-      _showSnackBar('Pengajuan izin berhasil tersimpan!', Icons.check_circle_outline);
+      _showSnackBar('Pengajuan izin berhasil dikirim (Status: Pending)!', Icons.check_circle_outline);
       Navigator.pop(context);
     } catch (e) {
       if (!mounted) return;
@@ -141,69 +161,99 @@ class _AbsentScreenState extends State<AbsentScreen> {
 
   @override
   void dispose() {
-    _nameController.dispose();
     _reasonController.dispose();
     super.dispose();
+  }
+
+  Widget _buildLockedIdentityCard() {
+    final name = _lockedUser?.name ?? 'Memuat profil...';
+    final nis = _lockedUser?.nis ?? '-';
+    final userClass = _lockedUser?.userClass ?? 'XI RPL';
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE8EEFF), width: 1.2),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: const BoxDecoration(
+              color: Color(0xFFE8EEFF),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.badge_outlined,
+              color: Color(0xFF2952F2),
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'PEMOHON IZIN (TERKUNCI)',
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.6,
+                    color: Color(0xFF2952F2),
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  name,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF0E1A2B),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'NIS: $nis • Kelas: $userClass',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF5B6474),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Icon(
+            Icons.lock_outline_rounded,
+            size: 18,
+            color: Color(0xFF5B6474),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: const Color(0xFFF2F4F7),
       appBar: AppBar(
         title: const Text('Pengajuan Izin & Sakit'),
       ),
       body: Center(
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 640),
+          constraints: const BoxConstraints(maxWidth: 480),
           child: SingleChildScrollView(
             padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 20.0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Info Card
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFEFF6FF),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: const Color(0xFFBFDBFE)),
-                  ),
-                  child: const Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(Icons.info_outline, color: Color(0xFF2563EB), size: 20),
-                      SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'Pengajuan izin atau sakit akan tercatat langsung di riwayat kehadiran XI RPL.',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Color(0xFF1E3A8A),
-                            height: 1.4,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 20),
-
-                // 1. Input Nama Lengkap
-                const Text(
-                  'NAMA SISWA',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF475569), letterSpacing: 0.6),
-                ),
-                const SizedBox(height: 6),
-                TextField(
-                  controller: _nameController,
-                  decoration: const InputDecoration(
-                    labelText: 'Nama Lengkap Siswa',
-                    hintText: 'Nama lengkap sesuai presensi',
-                    prefixIcon: Icon(Icons.person_outline, color: Color(0xFF64748B)),
-                  ),
-                ),
+                // 1. Kartu Identitas Siswa Terkunci (Menggantikan input manual nama)
+                _buildLockedIdentityCard(),
 
                 const SizedBox(height: 20),
 
@@ -251,14 +301,14 @@ class _AbsentScreenState extends State<AbsentScreen> {
                           decoration: BoxDecoration(
                             color: Colors.white,
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: const Color(0xFFE2E8F0)),
+                            border: Border.all(color: const Color(0xFFE8EEFF)),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               const Row(
                                 children: [
-                                  Icon(Icons.calendar_today, size: 14, color: Color(0xFF2563EB)),
+                                  Icon(Icons.calendar_today, size: 14, color: Color(0xFF2952F2)),
                                   SizedBox(width: 6),
                                   Text('Mulai', style: TextStyle(fontSize: 11, color: Color(0xFF475569), fontWeight: FontWeight.w600)),
                                 ],
@@ -266,7 +316,7 @@ class _AbsentScreenState extends State<AbsentScreen> {
                               const SizedBox(height: 6),
                               Text(
                                 _formatDate(_startDate),
-                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF0F172A)),
+                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF0E1A2B)),
                               ),
                             ],
                           ),
@@ -283,14 +333,14 @@ class _AbsentScreenState extends State<AbsentScreen> {
                           decoration: BoxDecoration(
                             color: Colors.white,
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: const Color(0xFFE2E8F0)),
+                            border: Border.all(color: const Color(0xFFE8EEFF)),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               const Row(
                                 children: [
-                                  Icon(Icons.event, size: 14, color: Color(0xFF2563EB)),
+                                  Icon(Icons.event, size: 14, color: Color(0xFF2952F2)),
                                   SizedBox(width: 6),
                                   Text('Sampai', style: TextStyle(fontSize: 11, color: Color(0xFF475569), fontWeight: FontWeight.w600)),
                                 ],
@@ -298,7 +348,7 @@ class _AbsentScreenState extends State<AbsentScreen> {
                               const SizedBox(height: 6),
                               Text(
                                 _formatDate(_endDate),
-                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF0F172A)),
+                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF0E1A2B)),
                               ),
                             ],
                           ),
@@ -327,14 +377,15 @@ class _AbsentScreenState extends State<AbsentScreen> {
                   ),
                 ),
 
-                const SizedBox(height: 32),
+                const SizedBox(height: 28),
 
                 // Tombol Kirim
                 ElevatedButton(
                   onPressed: _isLoading ? null : submitPermission,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1E2B58),
+                    backgroundColor: const Color(0xFF2952F2),
                     padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                   ),
                   child: _isLoading
                       ? const SizedBox(

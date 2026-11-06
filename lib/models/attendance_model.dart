@@ -2,6 +2,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 class AttendanceModel {
   final String id;
+  final String userId;
+  final String nis;
+  final String studentClass;
+  final String approvalStatus; // 'pending', 'approved', 'rejected'
   final String name;
   final String description;
   final String address;
@@ -14,6 +18,10 @@ class AttendanceModel {
 
   const AttendanceModel({
     required this.id,
+    this.userId = '',
+    this.nis = '-',
+    this.studentClass = 'XI RPL',
+    this.approvalStatus = 'approved',
     required this.name,
     required this.description,
     required this.address,
@@ -33,15 +41,30 @@ class AttendanceModel {
   }
 
   factory AttendanceModel.fromMap(Map<String, dynamic> data, String id) {
+    final String parsedType = data['type']?.toString() ?? 'attendance';
+    final String defaultApproval =
+        parsedType == 'permission' ? 'pending' : 'approved';
+
     return AttendanceModel(
       id: id,
+      userId: data['userId']?.toString() ?? '',
+      nis: (data['nis']?.toString() ?? '').trim().isNotEmpty
+          ? data['nis'].toString().trim()
+          : '-',
+      studentClass: (data['studentClass']?.toString() ?? '').trim().isNotEmpty
+          ? data['studentClass'].toString().trim()
+          : 'XI RPL',
+      approvalStatus:
+          (data['approvalStatus']?.toString() ?? '').trim().isNotEmpty
+              ? data['approvalStatus'].toString().trim().toLowerCase()
+              : defaultApproval,
       name: (data['name']?.toString() ?? '').trim().isNotEmpty
           ? data['name'].toString().trim()
           : 'Siswa',
       description: data['description']?.toString() ?? '-',
       address: data['address']?.toString() ?? '-',
       datetime: data['datetime']?.toString() ?? '-',
-      type: data['type']?.toString() ?? 'attendance',
+      type: parsedType,
       reason: data['reason']?.toString(),
       latitude: _parseDouble(data['latitude']),
       longitude: _parseDouble(data['longitude']),
@@ -51,6 +74,10 @@ class AttendanceModel {
 
   Map<String, dynamic> toMap() {
     return <String, dynamic>{
+      'userId': userId,
+      'nis': nis,
+      'studentClass': studentClass,
+      'approvalStatus': approvalStatus,
       'name': name,
       'description': description,
       'address': address,
@@ -78,4 +105,3 @@ class AttendanceModel {
     return DateTime.now();
   }
 }
-

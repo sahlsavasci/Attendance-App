@@ -2,33 +2,52 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../models/attendance_model.dart';
+import '../../models/user_model.dart';
 import '../../services/attendance_service.dart';
+import '../../services/auth_service.dart';
 import '../../utils/csv_exporter/csv_exporter.dart';
 
 class AttendanceHistoryScreen extends StatefulWidget {
-  const AttendanceHistoryScreen({super.key});
+  final UserModel? currentUser;
+
+  const AttendanceHistoryScreen({super.key, this.currentUser});
 
   @override
   State<AttendanceHistoryScreen> createState() => _AttendanceHistoryScreenState();
 }
 
 class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
-  static const _navy = Color(0xFF1E2B58);
+  static const _cobalt500 = Color(0xFF2952F2);
   static const _filters = ['Semua', 'Attend', 'Late', 'Izin', 'Sakit'];
   static const _csvFileName = 'rekap_presensi_XI_RPL.csv';
 
   final AttendanceService _attendanceService = AttendanceService();
+  final AuthService _authService = AuthService();
 
   final TextEditingController searchController = TextEditingController();
   String selectedFilter = 'Semua';
 
+  UserModel? _activeUser;
   List<AttendanceModel> _currentItems = [];
   bool _isExporting = false;
+
+  bool get _isTeacher => _activeUser?.isTeacher ?? false;
 
   @override
   void initState() {
     super.initState();
+    _activeUser = widget.currentUser;
+    if (_activeUser == null) {
+      _loadUser();
+    }
     searchController.addListener(_onSearchChanged);
+  }
+
+  Future<void> _loadUser() async {
+    final profile = await _authService.getCurrentUserProfile();
+    if (mounted && profile != null) {
+      setState(() => _activeUser = profile);
+    }
   }
 
   void _onSearchChanged() => setState(() {});
@@ -51,12 +70,15 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
 
   String _buildCsvString(List<AttendanceModel> data) {
     final buffer = StringBuffer();
-    buffer.writeln('Nama,Status,Tanggal/Waktu,Alamat,Alasan');
+    buffer.writeln('Nama,NIS,Kelas,Status,Approval,Tanggal/Waktu,Alamat,Alasan');
 
     for (final item in data) {
       final row = [
         _escapeCsvField(item.name),
+        _escapeCsvField(item.nis),
+        _escapeCsvField(item.studentClass),
         _escapeCsvField(item.description),
+        _escapeCsvField(item.approvalStatus),
         _escapeCsvField(item.datetime),
         _escapeCsvField(item.address),
         _escapeCsvField(item.reason ?? '-'),
@@ -108,9 +130,9 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
     if (name.trim().isEmpty) return const Color(0xFF64748B);
     final int hash = name.codeUnits.fold(0, (prev, elem) => prev + elem);
     const colors = [
-      Color(0xFF1E2B58),
+      Color(0xFF2952F2),
       Color(0xFF0D9488),
-      Color(0xFF2563EB),
+      Color(0xFF1A36A6),
       Color(0xFF7C3AED),
       Color(0xFFD97706),
       Color(0xFFDC2626),
@@ -122,15 +144,15 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
   Color _getStatusColor(String description) {
     final lower = description.toLowerCase();
     if (lower.contains('attend') || lower.contains('hadir') || lower.contains('tepat')) {
-      return const Color(0xFF047857); // Emerald
+      return const Color(0xFF12B76A);
     } else if (lower.contains('late') || lower.contains('terlambat')) {
-      return const Color(0xFFB45309); // Amber
+      return const Color(0xFFF79009);
     } else if (lower.contains('leave') || lower.contains('luar')) {
-      return const Color(0xFFB91C1C); // Red
+      return const Color(0xFFD92D20);
     } else if (lower.contains('sakit') || lower.contains('izin')) {
-      return const Color(0xFF1D4ED8); // Royal Blue
+      return const Color(0xFF2952F2);
     }
-    return const Color(0xFF475569);
+    return const Color(0xFF5B6474);
   }
 
   void _showSnackBar(ScaffoldMessengerState messenger, String message) {
@@ -147,6 +169,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
     final addressController = TextEditingController(text: item.address);
     final descriptionController = TextEditingController(text: item.description);
     final datetimeController = TextEditingController(text: item.datetime);
+    String approvalStatus = item.approvalStatus;
     final messenger = ScaffoldMessenger.of(context);
     var isSaving = false;
 
@@ -167,9 +190,10 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                   'address': addressController.text.trim(),
                   'description': descriptionController.text.trim(),
                   'datetime': datetimeController.text.trim(),
+                  'approvalStatus': approvalStatus,
                 });
                 if (dialogContext.mounted) Navigator.pop(dialogContext);
-                _showSnackBar(messenger, 'Data berhasil diperbarui!');
+                _showSnackBar(messenger, 'Data berhasil diperbarui oleh Wali Kelas!');
               } catch (e) {
                 if (dialogContext.mounted) setDialogState(() => isSaving = false);
                 _showSnackBar(messenger, 'Gagal memperbarui data: $e');
@@ -177,8 +201,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
             }
 
             return AlertDialog(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              title: const Text('Edit Catatan Presensi', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: const Text('Kelola Catatan (Wali Kelas)', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -191,6 +215,23 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                     TextField(
                       controller: descriptionController,
                       decoration: const InputDecoration(labelText: 'Status / Keterangan'),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      initialValue: ['pending', 'approved', 'rejected'].contains(approvalStatus)
+                          ? approvalStatus
+                          : 'approved',
+                      decoration: const InputDecoration(labelText: 'Status Persetujuan'),
+                      items: const [
+                        DropdownMenuItem(value: 'approved', child: Text('Approved (Disetujui)')),
+                        DropdownMenuItem(value: 'pending', child: Text('Pending (Menunggu)')),
+                        DropdownMenuItem(value: 'rejected', child: Text('Rejected (Ditolak)')),
+                      ],
+                      onChanged: (val) {
+                        if (val != null) {
+                          setDialogState(() => approvalStatus = val);
+                        }
+                      },
                     ),
                     const SizedBox(height: 12),
                     TextField(
@@ -213,8 +254,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                 ),
                 ElevatedButton(
                   onPressed: isSaving ? null : save,
-                  style: ElevatedButton.styleFrom(backgroundColor: _navy),
-                  child: Text(isSaving ? 'Menyimpan…' : 'Simpan Perubahan'),
+                  style: ElevatedButton.styleFrom(backgroundColor: _cobalt500),
+                  child: Text(isSaving ? 'Menyimpan…' : 'Simpan'),
                 ),
               ],
             );
@@ -251,10 +292,10 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
             }
 
             return AlertDialog(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
               title: const Text('Hapus Catatan?', style: TextStyle(fontWeight: FontWeight.bold)),
               content: const Text(
-                'Apakah Anda yakin ingin menghapus data presensi ini? Tindakan ini permanen dan tidak dapat dibatalkan.',
+                'Apakah Anda yakin ingin menghapus data presensi ini? Tindakan ini hanya diizinkan untuk Wali Kelas.',
                 style: TextStyle(color: Color(0xFF475569), height: 1.4),
               ),
               actions: [
@@ -264,7 +305,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                 ),
                 ElevatedButton(
                   onPressed: isDeleting ? null : delete,
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFB91C1C)),
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFD92D20)),
                   child: Text(isDeleting ? 'Menghapus…' : 'Ya, Hapus Data'),
                 ),
               ],
@@ -278,7 +319,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: const Color(0xFFF2F4F7),
       appBar: AppBar(
         title: const Text('Riwayat Presensi Siswa'),
         actions: [
@@ -306,7 +347,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
           child: Column(
             children: [
               _buildSearchAndFilter(),
-              const Divider(height: 1, color: Color(0xFFE2E8F0)),
+              const Divider(height: 1, color: Color(0xFFE8EEFF)),
               Expanded(child: _buildHistoryList()),
             ],
           ),
@@ -325,7 +366,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
             controller: searchController,
             textInputAction: TextInputAction.search,
             decoration: InputDecoration(
-              hintText: 'Cari nama siswa...',
+              hintText: 'Cari nama atau NIS siswa...',
               prefixIcon: const Icon(Icons.search, size: 20, color: Color(0xFF64748B)),
               suffixIcon: searchController.text.isNotEmpty
                   ? IconButton(
@@ -351,8 +392,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                   label: Text(filter),
                   selected: isSelected,
                   onSelected: (_) => setState(() => selectedFilter = filter),
-                  selectedColor: _navy,
-                  backgroundColor: const Color(0xFFF1F5F9),
+                  selectedColor: _cobalt500,
+                  backgroundColor: const Color(0xFFF2F4F7),
                   showCheckmark: false,
                   labelStyle: TextStyle(
                     fontSize: 12,
@@ -362,7 +403,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(20),
                     side: BorderSide(
-                      color: isSelected ? _navy : const Color(0xFFCBD5E1),
+                      color: isSelected ? _cobalt500 : const Color(0xFFE8EEFF),
                     ),
                   ),
                 );
@@ -387,7 +428,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
         if (snapshot.hasError) {
           return _buildMessage(
             icon: Icons.cloud_off,
-            iconColor: const Color(0xFFB91C1C),
+            iconColor: const Color(0xFFD92D20),
             title: 'Gagal memuat data',
             body: 'Periksa koneksi internet, lalu buka ulang halaman ini.\n${snapshot.error}',
           );
@@ -395,7 +436,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
 
         if (!snapshot.hasData) {
           return const Center(
-            child: CircularProgressIndicator(color: _navy),
+            child: CircularProgressIndicator(color: _cobalt500),
           );
         }
 
@@ -483,6 +524,36 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
     );
   }
 
+  Widget _buildApprovalChip(String approvalStatus) {
+    final status = approvalStatus.toLowerCase();
+    Color color = const Color(0xFF12B76A);
+    String label = 'Approved';
+
+    if (status == 'pending') {
+      color = const Color(0xFFF79009);
+      label = 'Pending';
+    } else if (status == 'rejected') {
+      color = const Color(0xFFD92D20);
+      label = 'Rejected';
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        '• $label',
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w700,
+          fontSize: 10.5,
+        ),
+      ),
+    );
+  }
+
   Widget _buildAttendanceCard(AttendanceModel item) {
     final statusColor = _getStatusColor(item.description);
 
@@ -490,8 +561,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE8EEFF), width: 1.2),
       ),
       child: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -518,51 +589,69 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                         item.name,
                         style: const TextStyle(
                           fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF0F172A),
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF0E1A2B),
                         ),
                       ),
-                      const SizedBox(height: 4),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: statusColor.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: statusColor.withValues(alpha: 0.4)),
+                      const SizedBox(height: 2),
+                      Text(
+                        'NIS: ${item.nis} • ${item.studentClass}',
+                        style: const TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF5B6474),
                         ),
-                        child: Text(
-                          item.description,
-                          style: TextStyle(
-                            color: statusColor,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 11,
+                      ),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: statusColor.withValues(alpha: 0.10),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: statusColor.withValues(alpha: 0.4)),
+                            ),
+                            child: Text(
+                              item.description,
+                              style: TextStyle(
+                                color: statusColor,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 11,
+                              ),
+                            ),
                           ),
-                        ),
+                          _buildApprovalChip(item.approvalStatus),
+                        ],
                       ),
                     ],
                   ),
                 ),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      tooltip: 'Edit Presensi',
-                      icon: const Icon(Icons.edit_outlined, color: Color(0xFF1D4ED8), size: 20),
-                      onPressed: () => _showEditDialog(item),
-                    ),
-                    IconButton(
-                      tooltip: 'Hapus Presensi',
-                      icon: const Icon(Icons.delete_outline, color: Color(0xFFB91C1C), size: 20),
-                      onPressed: () => _showDeleteDialog(item.id),
-                    ),
-                  ],
-                ),
+                // Role-Based Access Control: Hanya Wali Kelas (teacher) yang boleh Edit/Delete
+                if (_isTeacher)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: 'Kelola / Setujui (Wali Kelas)',
+                        icon: const Icon(Icons.edit_outlined, color: Color(0xFF2952F2), size: 20),
+                        onPressed: () => _showEditDialog(item),
+                      ),
+                      IconButton(
+                        tooltip: 'Hapus Presensi (Wali Kelas)',
+                        icon: const Icon(Icons.delete_outline, color: Color(0xFFD92D20), size: 20),
+                        onPressed: () => _showDeleteDialog(item.id),
+                      ),
+                    ],
+                  ),
               ],
             ),
             const Divider(height: 20, color: Color(0xFFF1F5F9)),
             Row(
               children: [
-                const Icon(Icons.schedule, size: 15, color: Color(0xFF64748B)),
+                const Icon(Icons.schedule, size: 15, color: Color(0xFF5B6474)),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
@@ -577,7 +666,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.location_on_outlined, size: 15, color: Color(0xFF64748B)),
+                  const Icon(Icons.location_on_outlined, size: 15, color: Color(0xFF5B6474)),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(

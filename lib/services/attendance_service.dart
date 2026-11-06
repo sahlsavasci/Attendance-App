@@ -9,6 +9,8 @@ class AttendanceService {
   Future<void> recordAttendance(AttendanceModel attendance) async {
     final payload = attendance.toMap();
     payload['type'] = 'attendance';
+    payload['approvalStatus'] =
+        attendance.approvalStatus.isNotEmpty ? attendance.approvalStatus : 'approved';
     payload['created_at'] = FieldValue.serverTimestamp();
     await _collection.add(payload);
   }
@@ -16,6 +18,8 @@ class AttendanceService {
   Future<void> submitPermission(AttendanceModel permission) async {
     final payload = permission.toMap();
     payload['type'] = 'permission';
+    payload['approvalStatus'] =
+        permission.approvalStatus.isNotEmpty ? permission.approvalStatus : 'pending';
     payload['created_at'] = FieldValue.serverTimestamp();
     await _collection.add(payload);
   }
@@ -53,7 +57,8 @@ class AttendanceService {
 
   bool _matchesSearch(AttendanceModel item, String query) {
     if (query.isEmpty) return true;
-    return item.name.toLowerCase().contains(query);
+    return item.name.toLowerCase().contains(query) ||
+        item.nis.toLowerCase().contains(query);
   }
 
   bool _matchesFilter(AttendanceModel item, String filter) {
@@ -80,4 +85,3 @@ class AttendanceService {
     }
   }
 }
-

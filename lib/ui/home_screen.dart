@@ -3,13 +3,17 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:attendance_app/models/attendance_model.dart';
+import 'package:attendance_app/models/user_model.dart';
 import 'package:attendance_app/services/attendance_service.dart';
+import 'package:attendance_app/services/auth_service.dart';
 import 'package:attendance_app/ui/attend/attend_screen.dart';
 import 'package:attendance_app/ui/absent/absent_screen.dart';
 import 'package:attendance_app/ui/attendance_history/history_screen.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final UserModel? currentUser;
+
+  const HomeScreen({super.key, this.currentUser});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -31,19 +35,44 @@ class _HomeScreenState extends State<HomeScreen> {
   static const Color _errorRed = Color(0xFFD92D20);
 
   final AttendanceService _attendanceService = AttendanceService();
+  final AuthService _authService = AuthService();
   late final Stream<List<AttendanceModel>> _historyStream;
   late Timer _clockTimer;
   DateTime _now = DateTime.now();
+  UserModel? _userProfile;
+
+  UserModel get _effectiveUser =>
+      widget.currentUser ??
+      _userProfile ??
+      const UserModel(
+        uid: 'demo_student_uid',
+        email: AuthService.studentDemoEmail,
+        name: 'Sahl Savasci',
+        nis: '202411001',
+        role: 'student',
+        userClass: 'XI RPL',
+      );
 
   @override
   void initState() {
     super.initState();
+    _userProfile = widget.currentUser;
+    if (_userProfile == null) {
+      _loadUserProfile();
+    }
     _historyStream = _attendanceService.streamAttendanceHistory();
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) {
         setState(() => _now = DateTime.now());
       }
     });
+  }
+
+  Future<void> _loadUserProfile() async {
+    final loaded = await _authService.getCurrentUserProfile();
+    if (mounted && loaded != null) {
+      setState(() => _userProfile = loaded);
+    }
   }
 
   @override
@@ -117,6 +146,275 @@ class _HomeScreenState extends State<HomeScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(builder: (context) => screen),
+    );
+  }
+
+  void _showStudentBadgeSheet() {
+    final user = _effectiveUser;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Lanyard Strap (Matching Image 6: Employee/Student Badge)
+                Container(
+                  width: 34,
+                  height: 36,
+                  decoration: const BoxDecoration(
+                    color: _cobalt500,
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
+                  ),
+                  alignment: Alignment.center,
+                  child: RotatedBox(
+                    quarterTurns: 1,
+                    child: Text(
+                      'IDN SOLO',
+                      style: _manrope(
+                        fontSize: 8.5,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                  ),
+                ),
+                Container(
+                  width: 48,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFD0D5DD),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+                // Main Lanyard Badge Card
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: _cardSurface,
+                    borderRadius: BorderRadius.circular(28),
+                    border: Border.all(color: _cobalt50, width: 1.5),
+                    boxShadow: [
+                      BoxShadow(
+                        color: _inkText.withValues(alpha: 0.08),
+                        blurRadius: 24,
+                        offset: const Offset(0, 12),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Container(
+                            width: 24,
+                            height: 24,
+                            decoration: BoxDecoration(
+                              color: _cobalt500,
+                              borderRadius: BorderRadius.circular(7),
+                            ),
+                            child: const Icon(
+                              Icons.school_rounded,
+                              color: Colors.white,
+                              size: 14,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'SMK IDN Boarding School',
+                            style: _manrope(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                              color: _inkText,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+                      Container(
+                        width: 78,
+                        height: 78,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: const LinearGradient(
+                            colors: [_cobalt500, _cobalt700],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          border: Border.all(color: _cobalt50, width: 3),
+                        ),
+                        alignment: Alignment.center,
+                        child: Text(
+                          user.name.isNotEmpty
+                              ? user.name[0].toUpperCase()
+                              : 'S',
+                          style: _manrope(
+                            fontSize: 28,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        user.name,
+                        textAlign: TextAlign.center,
+                        style: _manrope(
+                          fontSize: 19,
+                          fontWeight: FontWeight.w800,
+                          color: _inkText,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        user.isTeacher
+                            ? 'Wali Kelas / Guru Pembimbing'
+                            : 'Peserta Didik Aktif',
+                        style: _manrope(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: _slateText,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: _cobalt50,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          user.userClass,
+                          style: _manrope(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w800,
+                            color: _cobalt500,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
+                        ),
+                        decoration: BoxDecoration(
+                          color: _canvasBg,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  user.isTeacher ? 'NIP / ID Guru' : 'Nomor Induk Siswa',
+                                  style: _manrope(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: _slateText,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  user.nis,
+                                  style: _manrope(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w800,
+                                    color: _inkText,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Container(
+                              padding: const EdgeInsets.all(6),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: _cobalt50),
+                              ),
+                              child: const Icon(
+                                Icons.qr_code_2_rounded,
+                                size: 28,
+                                color: _inkText,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () async {
+                                Navigator.pop(sheetContext);
+                                await _authService.signOut();
+                              },
+                              icon: const Icon(Icons.logout_rounded, size: 17),
+                              label: Text(
+                                'Keluar Akun',
+                                style: _manrope(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: _errorRed,
+                                ),
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: _errorRed,
+                                side: BorderSide(
+                                  color: _errorRed.withValues(alpha: 0.35),
+                                ),
+                                padding: const EdgeInsets.symmetric(vertical: 13),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () => Navigator.pop(sheetContext),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _cobalt500,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 13),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                              ),
+                              child: Text(
+                                'Tutup Kartu',
+                                style: _manrope(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -203,10 +501,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 const SizedBox(height: 14),
                 _buildRuleItem(
-                  icon: Icons.description_outlined,
-                  title: 'Dispensasi & Surat Sakit',
+                  icon: Icons.lock_person_outlined,
+                  title: 'Identity Locking & Verifikasi Wali Kelas',
                   subtitle:
-                      'Gunakan kartu Izin / Sakit apabila berhalangan hadir agar tercatat di log presensi kelas.',
+                      'Setiap presensi dikunci ke NIS pengguna yang login. Perubahan/penghapusan data hanya diizinkan untuk Wali Kelas.',
                 ),
                 const SizedBox(height: 22),
                 SizedBox(
@@ -317,59 +615,118 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // ==========================================
-  // A. Top Header
+  // A. Top Header (Menampilkan Nama, NIS & Kelas dari UserModel)
   // ==========================================
   Widget _buildTopHeader() {
+    final user = _effectiveUser;
+
     return Row(
       children: [
-        Container(
-          width: 46,
-          height: 46,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: const LinearGradient(
-              colors: [_cobalt500, _cobalt700],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
+        GestureDetector(
+          onTap: _showStudentBadgeSheet,
+          child: Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: const LinearGradient(
+                colors: [_cobalt500, _cobalt700],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              border: Border.all(color: _cobalt50, width: 2),
             ),
-            border: Border.all(color: _cobalt50, width: 2),
-          ),
-          alignment: Alignment.center,
-          child: const Icon(
-            Icons.school_rounded,
-            color: Colors.white,
-            size: 22,
+            alignment: Alignment.center,
+            child: const Icon(
+              Icons.school_rounded,
+              color: Colors.white,
+              size: 22,
+            ),
           ),
         ),
         const SizedBox(width: 12),
         Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                _getGreeting(),
-                style: _manrope(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: _slateText,
+          child: GestureDetector(
+            onTap: _showStudentBadgeSheet,
+            behavior: HitTestBehavior.opaque,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${_getGreeting()} ${user.userClass} • ${user.nis}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: _manrope(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: _slateText,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                'Peserta Didik XI RPL',
-                style: _manrope(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800,
-                  color: _inkText,
-                  letterSpacing: -0.3,
+                const SizedBox(height: 2),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        user.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: _manrope(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
+                          color: _inkText,
+                          letterSpacing: -0.3,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 7,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: _cobalt50,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        user.isTeacher ? 'GURU' : 'SISWA',
+                        style: _manrope(
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w800,
+                          color: _cobalt500,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
+        const SizedBox(width: 8),
         Container(
-          width: 42,
-          height: 42,
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: _cardSurface,
+            shape: BoxShape.circle,
+            border: Border.all(color: _cobalt50, width: 1.2),
+          ),
+          child: IconButton(
+            tooltip: 'Kartu Identitas & Keluar',
+            padding: EdgeInsets.zero,
+            icon: const Icon(
+              Icons.badge_outlined,
+              size: 19,
+              color: _cobalt500,
+            ),
+            onPressed: _showStudentBadgeSheet,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Container(
+          width: 40,
+          height: 40,
           decoration: BoxDecoration(
             color: _cardSurface,
             shape: BoxShape.circle,
@@ -387,7 +744,7 @@ class _HomeScreenState extends State<HomeScreen> {
             padding: EdgeInsets.zero,
             icon: const Icon(
               Icons.info_outline_rounded,
-              size: 20,
+              size: 19,
               color: _inkText,
             ),
             onPressed: _showAttendanceRulesSheet,
@@ -438,7 +795,6 @@ class _HomeScreenState extends State<HomeScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  // Left Pill: Dynamic attendance status chip
                   Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 11,
@@ -471,8 +827,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       ],
                     ),
                   ),
-
-                  // Right Pill: School boundary badge
                   Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 11,
@@ -539,7 +893,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 width: double.infinity,
                 height: 52,
                 child: ElevatedButton(
-                  onPressed: () => _navigateTo(const AttendScreen()),
+                  onPressed: () => _navigateTo(
+                    AttendScreen(currentUser: _effectiveUser),
+                  ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _cobalt500,
                     foregroundColor: Colors.white,
@@ -588,7 +944,9 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icons.calendar_today_outlined,
             title: 'Izin / Sakit',
             subtitle: 'Dispensasi & surat sakit',
-            onTap: () => _navigateTo(const AbsentScreen()),
+            onTap: () => _navigateTo(
+              AbsentScreen(currentUser: _effectiveUser),
+            ),
           ),
         ),
         const SizedBox(width: 14),
@@ -597,7 +955,9 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icons.history_rounded,
             title: 'Riwayat Kelas',
             subtitle: 'Log presensi & unduh CSV',
-            onTap: () => _navigateTo(const AttendanceHistoryScreen()),
+            onTap: () => _navigateTo(
+              AttendanceHistoryScreen(currentUser: _effectiveUser),
+            ),
           ),
         ),
       ],
@@ -618,7 +978,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 item.createdAt.month == _now.month)
             .toList();
 
-        // Hitung metrik dari stream bila ada data, atau gunakan baseline metrik
         final bool hasStreamData = currentMonthItems.isNotEmpty;
         int totalHadir = 20;
         int tepatWaktu = 18;
@@ -647,7 +1006,9 @@ class _HomeScreenState extends State<HomeScreen> {
           color: _cardSurface,
           borderRadius: BorderRadius.circular(24),
           child: InkWell(
-            onTap: () => _navigateTo(const AttendanceHistoryScreen()),
+            onTap: () => _navigateTo(
+              AttendanceHistoryScreen(currentUser: _effectiveUser),
+            ),
             borderRadius: BorderRadius.circular(24),
             child: Container(
               padding: const EdgeInsets.all(20),

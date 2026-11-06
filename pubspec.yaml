@@ -43,6 +43,7 @@ dependencies:
   google_mlkit_face_detection: ^0.13.1 # AI deteksi wajah Google ML Kit
   cloud_firestore: ^5.6.5              # Database NoSQL realtime Firebase
   firebase_core: ^3.12.1               # Core SDK Firebase
+  firebase_auth: ^5.4.4                # Autentikasi & manajemen sesi pengguna
   image_picker: ^1.1.2                 # Pengambilan gambar pendukung
   google_fonts: ^9.0.0
 
