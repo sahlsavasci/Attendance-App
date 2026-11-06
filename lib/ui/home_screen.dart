@@ -142,11 +142,14 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _navigateTo(Widget screen) {
-    Navigator.push(
+  Future<void> _navigateTo(Widget screen) async {
+    await Navigator.push(
       context,
       MaterialPageRoute(builder: (context) => screen),
     );
+    if (mounted) {
+      setState(() => _now = DateTime.now());
+    }
   }
 
   void _showStudentBadgeSheet() {

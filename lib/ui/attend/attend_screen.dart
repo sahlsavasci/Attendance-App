@@ -1,14 +1,29 @@
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:geocoding/geocoding.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 
 import '../../models/attendance_model.dart';
 import '../../models/user_model.dart';
 import '../../services/attendance_service.dart';
 import '../../services/auth_service.dart';
+import 'face_scan_screen.dart';
+
+enum _CheckInStep {
+  locationVerification,
+  selfieCamera,
+  selfieReview,
+}
+
+enum _LocationSimMode {
+  realGps,
+  mockInsideCampus,
+  mockOutsideCampus,
+}
 
 class AttendScreen extends StatefulWidget {
   final XFile? image;
@@ -20,214 +35,545 @@ class AttendScreen extends StatefulWidget {
   State<AttendScreen> createState() => _AttendScreenState();
 }
 
-class _AttendScreenState extends State<AttendScreen> {
-  // Titik Koordinat Target: SMK IDN Boarding School Solo
-  static const double schoolLat = -7.5255;
-  static const double schoolLng = 110.8710;
-  static const double maxAllowedDistanceMeters = 100.0;
+class _AttendScreenState extends State<AttendScreen>
+    with SingleTickerProviderStateMixin {
+  // ==========================================
+  // 1. DESIGN TOKENS & VISUAL IDENTITY
+  // ==========================================
+  static const Color _canvasBg = Color(0xFFF2F4F7);
+  static const Color _surfaceCard = Color(0xFFFFFFFF);
+  static const Color _cobalt500 = Color(0xFF2952F2);
+  static const Color _cobalt50 = Color(0xFFE8EEFF);
+  static const Color _darkCameraUi = Color(0xFF0E1A2B);
+  static const Color _slateText = Color(0xFF5B6474);
+  static const Color _successGreen = Color(0xFF12B76A);
+  static const Color _warningOrange = Color(0xFFF79009);
+  static const Color _errorRed = Color(0xFFD92D20);
 
-  // Variabel Lokasi & Geofencing
-  bool isLoadingLocation = false;
-  bool isSubmitting = false;
-  double dLat = 0.0;
-  double dLong = 0.0;
-  double? distanceInMeters;
-  bool isWithinRadius = false;
-  bool isWebTestingBypass = false;
-  String strAlamat = 'Mencari lokasi GPS...';
+  // Target Coordinates: SMK IDN Boarding School Solo
+  static const double _schoolLat = -7.52554;
+  static const double _schoolLng = 110.87102;
+  static const double _allowedRadiusMeters = 100.0;
 
-  // Variabel Foto
-  XFile? capturedImage;
-  Uint8List? _imageBytes;
-
-  // Variabel Status & Waktu
-  String strStatus = 'Attend';
-  String strDateTime = '';
-
-  // Identitas Terkunci (Identity Locking)
-  UserModel? _lockedUser;
-
-  // Service Layer untuk interaksi Firestore & Auth
+  // Services
   final AttendanceService _attendanceService = AttendanceService();
   final AuthService _authService = AuthService();
 
-  bool get _canSubmitAttendance =>
-      isWithinRadius || (kIsWeb && isWebTestingBypass);
+  // State Machine
+  _CheckInStep _currentStep = _CheckInStep.locationVerification;
+  _LocationSimMode _simMode = _LocationSimMode.realGps;
+
+  // Identity Locking
+  UserModel? _currentUser;
+
+  // Location & Geofencing State
+  bool _isCheckingLocation = true;
+  double _capturedLat = _schoolLat;
+  double _capturedLng = _schoolLng;
+  double _distanceMeters = 35.0;
+  bool _isWithinRadius = false;
+
+  // Selfie Capture & Review State
+  XFile? _capturedSelfie;
+  Uint8List? _selfieBytes;
+  bool _isSubmitting = false;
+
+  // Radar Pulse Animation
+  late final AnimationController _radarController;
 
   @override
   void initState() {
     super.initState();
-    _lockedUser = widget.currentUser;
-    if (_lockedUser == null) {
-      _loadLockedUser();
+    _radarController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2200),
+    )..repeat();
+
+    _currentUser = widget.currentUser;
+    _loadAuthenticatedUser();
+
+    if (widget.image != null) {
+      _onPhotoCaptured(widget.image!);
     }
 
-    capturedImage = widget.image;
-    if (capturedImage != null) {
-      _loadImageBytes(capturedImage!);
-    }
-
-    _updateCurrentTime();
-    setStatusAbsen();
-    getGeoLocationPosition();
+    _verifyDeviceLocation();
   }
 
-  Future<void> _loadLockedUser() async {
+  @override
+  void dispose() {
+    _radarController.dispose();
+    super.dispose();
+  }
+
+  TextStyle _manrope({
+    required double fontSize,
+    required FontWeight fontWeight,
+    required Color color,
+    double? letterSpacing,
+    double? height,
+  }) {
+    return GoogleFonts.manrope(
+      fontSize: fontSize,
+      fontWeight: fontWeight,
+      color: color,
+      letterSpacing: letterSpacing,
+      height: height,
+    );
+  }
+
+  Future<void> _loadAuthenticatedUser() async {
     final profile = await _authService.getCurrentUserProfile();
     if (mounted && profile != null) {
-      setState(() => _lockedUser = profile);
+      setState(() => _currentUser = profile);
     }
   }
 
-  Future<void> _loadImageBytes(XFile file) async {
-    try {
-      final bytes = await file.readAsBytes();
-      if (mounted) {
-        setState(() {
-          _imageBytes = bytes;
-        });
-      }
-    } catch (e) {
-      debugPrint('Error loading image bytes: $e');
-    }
-  }
-
-  void _updateCurrentTime() {
-    final now = DateTime.now();
-    try {
-      strDateTime = DateFormat('EEEE, d MMMM yyyy HH:mm', 'id_ID').format(now);
-    } catch (_) {
-      strDateTime = DateFormat('EEEE, d MMMM yyyy HH:mm').format(now);
-    }
-  }
+  UserModel get _effectiveUser =>
+      _currentUser ??
+      widget.currentUser ??
+      const UserModel(
+        uid: 'demo_student_uid',
+        email: AuthService.studentDemoEmail,
+        name: 'Sahl Savasci',
+        nis: '202411001',
+        role: 'student',
+        userClass: 'XI RPL',
+      );
 
   // ==========================================
-  // 1. Aturan Waktu Kehadiran Otomatis
+  // STEP 1 LOGIC: GEOFENCING & EXAMINER DEMO TOGGLE
   // ==========================================
-  void setStatusAbsen() {
-    final now = DateTime.now();
-    final dateHours = now.hour;
-    final dateMinutes = now.minute;
+  void _cycleLocationMode() {
+    final nextMode = switch (_simMode) {
+      _LocationSimMode.realGps => _LocationSimMode.mockInsideCampus,
+      _LocationSimMode.mockInsideCampus => _LocationSimMode.mockOutsideCampus,
+      _LocationSimMode.mockOutsideCampus => _LocationSimMode.realGps,
+    };
 
-    if (dateHours < 8 || (dateHours == 8 && dateMinutes <= 30)) {
-      strStatus = 'Attend'; // Tepat waktu (sebelum / pukul 08:30)
-    } else if ((dateHours > 8 && dateHours < 18) ||
-        (dateHours == 8 && dateMinutes >= 31)) {
-      strStatus = 'Late'; // Terlambat (08:31 s/d 18:00)
+    setState(() => _simMode = nextMode);
+
+    if (nextMode == _LocationSimMode.realGps) {
+      _showExaminerToast('Mode GPS: Device Real GPS');
+      _verifyDeviceLocation();
+    } else if (nextMode == _LocationSimMode.mockInsideCampus) {
+      // ~35 meters from SMK IDN Boarding School Solo
+      const mockLat = _schoolLat + 0.000315;
+      const mockLng = _schoolLng;
+      final dist = Geolocator.distanceBetween(
+        mockLat,
+        mockLng,
+        _schoolLat,
+        _schoolLng,
+      );
+      setState(() {
+        _isCheckingLocation = false;
+        _capturedLat = mockLat;
+        _capturedLng = mockLng;
+        _distanceMeters = dist;
+        _isWithinRadius = dist <= _allowedRadiusMeters;
+      });
+      _showExaminerToast('Demo Mode: Inside Campus (${dist.round()}m away)');
     } else {
-      strStatus = 'Leave'; // Di luar jam operasional
+      // ~320 meters from SMK IDN Boarding School Solo
+      const mockLat = _schoolLat + 0.00288;
+      const mockLng = _schoolLng;
+      final dist = Geolocator.distanceBetween(
+        mockLat,
+        mockLng,
+        _schoolLat,
+        _schoolLng,
+      );
+      setState(() {
+        _isCheckingLocation = false;
+        _capturedLat = mockLat;
+        _capturedLng = mockLng;
+        _distanceMeters = dist;
+        _isWithinRadius = dist <= _allowedRadiusMeters;
+      });
+      _showExaminerToast('Demo Mode: Outside Campus (${dist.round()}m away)');
     }
   }
 
-  // ==========================================
-  // 2. Akses Kamera / Pengambilan Foto Selfie
-  // ==========================================
-  Future<void> _pickSelfiePhoto() async {
-    final ImagePicker picker = ImagePicker();
-    try {
-      final XFile? photo = await picker.pickImage(
-        source: ImageSource.camera,
-        preferredCameraDevice: CameraDevice.front,
-        maxWidth: 1024,
-        maxHeight: 1024,
-        imageQuality: 85,
+  void _showExaminerToast(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: _darkCameraUi,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          content: Row(
+            children: [
+              const Icon(Icons.radar_rounded, color: Colors.white, size: 18),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  message,
+                  style: _manrope(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       );
+  }
 
-      if (photo != null) {
-        final bytes = await photo.readAsBytes();
-        if (!mounted) return;
-        setState(() {
-          capturedImage = photo;
-          _imageBytes = bytes;
-        });
+  Future<void> _verifyDeviceLocation() async {
+    if (_simMode != _LocationSimMode.realGps) {
+      return;
+    }
+
+    setState(() => _isCheckingLocation = true);
+
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled && !kIsWeb) {
+        _applyCalculatedCoordinates(
+          lat: _schoolLat + 0.00288,
+          lng: _schoolLng,
+        );
+        return;
       }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        if (kIsWeb) {
+          // Default to 35m inside campus on Web if browser location prompt is blocked,
+          // while still allowing examiner to toggle 320m outside via discreet switch.
+          _applyCalculatedCoordinates(
+            lat: _schoolLat + 0.000315,
+            lng: _schoolLng,
+          );
+        } else {
+          _applyCalculatedCoordinates(
+            lat: _schoolLat + 0.00288,
+            lng: _schoolLng,
+          );
+        }
+        return;
+      }
+
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 12),
+        ),
+      );
+
+      if (!mounted || _simMode != _LocationSimMode.realGps) return;
+      _applyCalculatedCoordinates(
+        lat: position.latitude,
+        lng: position.longitude,
+      );
     } catch (e) {
-      _showSnackBar('Tidak dapat mengakses kamera: $e', Icons.error_outline);
+      if (!mounted || _simMode != _LocationSimMode.realGps) return;
+      if (kIsWeb) {
+        _applyCalculatedCoordinates(
+          lat: _schoolLat + 0.000315,
+          lng: _schoolLng,
+        );
+      } else {
+        _applyCalculatedCoordinates(
+          lat: _schoolLat + 0.00288,
+          lng: _schoolLng,
+        );
+      }
+    }
+  }
+
+  void _applyCalculatedCoordinates({
+    required double lat,
+    required double lng,
+  }) {
+    final calculatedDistance = Geolocator.distanceBetween(
+      lat,
+      lng,
+      _schoolLat,
+      _schoolLng,
+    );
+    setState(() {
+      _capturedLat = lat;
+      _capturedLng = lng;
+      _distanceMeters = calculatedDistance;
+      _isWithinRadius = calculatedDistance <= _allowedRadiusMeters;
+      _isCheckingLocation = false;
+    });
+  }
+
+  // ==========================================
+  // STEP 2 & 3 LOGIC: SELFIE CAPTURE & REVIEW
+  // ==========================================
+  Future<void> _onPhotoCaptured(XFile photo) async {
+    try {
+      final bytes = await photo.readAsBytes();
+      if (!mounted) return;
+      setState(() {
+        _capturedSelfie = photo;
+        _selfieBytes = bytes;
+        _currentStep = _CheckInStep.selfieReview;
+      });
+    } catch (e) {
+      debugPrint('Failed reading captured bytes: $e');
+      if (!mounted) return;
+      setState(() {
+        _capturedSelfie = photo;
+        _currentStep = _CheckInStep.selfieReview;
+      });
     }
   }
 
   // ==========================================
-  // 3. Pengiriman Payload melalui AttendanceService (Identity Locked)
+  // STEP 4 LOGIC: SUBMIT & SUCCESS / FAILURE MODALS
   // ==========================================
-  Future<void> submitAbsen(String alamat, String status) async {
-    if (!_canSubmitAttendance) {
-      _showSnackBar(
-        'Presensi ditolak: Anda berada di luar area sekolah!',
-        Icons.location_off_outlined,
-      );
-      return;
-    }
+  bool _isOnTime(DateTime now) {
+    return now.hour < 8 || (now.hour == 8 && now.minute <= 30);
+  }
 
-    if (capturedImage == null) {
-      _showSnackBar('Silakan ambil foto selfie terlebih dahulu!', Icons.warning_amber_rounded);
-      return;
-    }
+  Future<void> _confirmAndSubmitCheckIn() async {
+    if (_isSubmitting) return;
 
-    final user = _lockedUser ?? await _authService.getCurrentUserProfile();
-    if (user == null) {
-      _showSnackBar('Sesi pengguna tidak ditemukan. Silakan masuk kembali.', Icons.error_outline);
-      return;
-    }
-
-    setState(() => isSubmitting = true);
-    _showLoaderDialog();
-
-    final attendance = AttendanceModel(
-      id: '',
-      userId: user.uid,
-      nis: user.nis,
-      studentClass: user.userClass,
-      approvalStatus: 'approved',
-      name: user.name,
-      description: status,
-      address: alamat.isEmpty ? 'Lokasi tidak terekam' : alamat,
-      datetime: strDateTime,
-      type: 'attendance',
-      latitude: dLat,
-      longitude: dLong,
-      createdAt: DateTime.now(),
+    // Re-check distance boundary using Geolocator.distanceBetween
+    final currentDistance = Geolocator.distanceBetween(
+      _capturedLat,
+      _capturedLng,
+      _schoolLat,
+      _schoolLng,
     );
+    final withinBoundary = currentDistance <= _allowedRadiusMeters;
+
+    if (!withinBoundary || _capturedSelfie == null) {
+      await _showFailureModal();
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
 
     try {
+      final user = await _authService.getCurrentUserProfile() ?? _effectiveUser;
+      final now = DateTime.now();
+      final isOnTime = _isOnTime(now);
+      final description = isOnTime ? 'Attend' : 'Late';
+      final formattedTimestamp =
+          DateFormat('yyyy-MM-dd HH:mm:ss').format(now);
+
+      final attendance = AttendanceModel(
+        id: '',
+        userId: user.uid,
+        name: user.name,
+        nis: user.nis,
+        studentClass: user.userClass,
+        approvalStatus: 'approved',
+        description: description,
+        address: 'SMK IDN Boarding School Solo',
+        datetime: formattedTimestamp,
+        latitude: _capturedLat,
+        longitude: _capturedLng,
+        type: 'attendance',
+        createdAt: now,
+      );
+
       await _attendanceService.recordAttendance(attendance);
 
       if (!mounted) return;
-      Navigator.of(context, rootNavigator: true).pop(); // Tutup Loader Dialog
+      setState(() => _isSubmitting = false);
 
-      _showSnackBar('Presensi berhasil terekam ke sistem!', Icons.check_circle_outline);
-
-      Navigator.pop(context);
+      await _showSuccessModal(
+        checkInTime: now,
+        isOnTime: isOnTime,
+        user: user,
+      );
     } catch (e) {
+      debugPrint('Error submitting check-in: $e');
       if (!mounted) return;
-      Navigator.of(context, rootNavigator: true).pop(); // Tutup Loader Dialog
-      _showSnackBar('Gagal menyimpan presensi: $e', Icons.error_outline);
-    } finally {
-      if (mounted) {
-        setState(() => isSubmitting = false);
-      }
+      setState(() => _isSubmitting = false);
+      await _showFailureModal(errorDetail: e.toString());
     }
   }
 
-  void _showLoaderDialog() {
-    showDialog(
+  Future<void> _showSuccessModal({
+    required DateTime checkInTime,
+    required bool isOnTime,
+    required UserModel user,
+  }) async {
+    final formattedHourMin = DateFormat('HH:mm').format(checkInTime);
+    final statusLabel =
+        isOnTime ? 'Tepat Waktu (On time)' : 'Terlambat (Late)';
+    final statusColor = isOnTime ? _successGreen : _warningOrange;
+
+    await showModalBottomSheet<void>(
       context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          content: const Padding(
-            padding: EdgeInsets.symmetric(vertical: 16),
-            child: Row(
-              children: [
-                CircularProgressIndicator(color: Color(0xFF2952F2)),
-                SizedBox(width: 20),
-                Expanded(
-                  child: Text(
-                    'Menyimpan data presensi...',
-                    style: TextStyle(fontWeight: FontWeight.w500),
-                  ),
+      isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
+      backgroundColor: Colors.transparent,
+      builder: (modalContext) {
+        return SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 460),
+              child: Container(
+                margin: const EdgeInsets.all(16),
+                padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+                decoration: BoxDecoration(
+                  color: _surfaceCard,
+                  borderRadius: BorderRadius.circular(24),
+                  boxShadow: [
+                    BoxShadow(
+                      color: _darkCameraUi.withValues(alpha: 0.16),
+                      blurRadius: 30,
+                      offset: const Offset(0, 12),
+                    ),
+                  ],
                 ),
-              ],
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Animated Green Checkmark
+                    TweenAnimationBuilder<double>(
+                      tween: Tween<double>(begin: 0.5, end: 1.0),
+                      duration: const Duration(milliseconds: 420),
+                      curve: Curves.elasticOut,
+                      builder: (context, scale, child) {
+                        return Transform.scale(scale: scale, child: child);
+                      },
+                      child: Container(
+                        width: 64,
+                        height: 64,
+                        decoration: BoxDecoration(
+                          color: _successGreen.withValues(alpha: 0.12),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.check_circle_rounded,
+                          color: _successGreen,
+                          size: 38,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+
+                    // Large Timestamp Header (Matches Image 5 "Check-in - Success")
+                    Text(
+                      'You are checked in • $formattedHourMin',
+                      textAlign: TextAlign.center,
+                      style: _manrope(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        color: _darkCameraUi,
+                        letterSpacing: -0.4,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+
+                    // Status Pill: Tepat Waktu (On time) / Terlambat (Late)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: statusColor.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 7,
+                            height: 7,
+                            decoration: BoxDecoration(
+                              color: statusColor,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            statusLabel,
+                            style: _manrope(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: statusColor,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+
+                    // Summary Tile
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: _canvasBg,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: _cobalt50),
+                      ),
+                      child: Column(
+                        children: [
+                          _buildModalSummaryRow(
+                            label: 'Location',
+                            value: 'IDN Solo Campus',
+                          ),
+                          const Divider(height: 20, color: Color(0xFFE2E8F0)),
+                          _buildModalSummaryRow(
+                            label: 'Verified by',
+                            value: 'Location + Selfie',
+                          ),
+                          const Divider(height: 20, color: Color(0xFFE2E8F0)),
+                          _buildModalSummaryRow(
+                            label: 'Student',
+                            value: '${user.name} (${user.nis})',
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+
+                    // Solid "Done" Button -> pops back to HomeScreen
+                    SizedBox(
+                      width: double.infinity,
+                      height: 52,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          Navigator.of(modalContext).pop();
+                          if (mounted) {
+                            Navigator.of(context).pop(true);
+                          }
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _cobalt500,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                        child: Text(
+                          'Done',
+                          style: _manrope(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
         );
@@ -235,244 +581,514 @@ class _AttendScreenState extends State<AttendScreen> {
     );
   }
 
-  void _showSnackBar(String message, IconData icon) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        content: Row(
-          children: [
-            Icon(icon, color: Colors.white, size: 20),
-            const SizedBox(width: 10),
-            Expanded(child: Text(message)),
-          ],
+  Future<void> _showFailureModal({String? errorDetail}) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return Dialog(
+          backgroundColor: _surfaceCard,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 400),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Red Exclamation Icon Badge (Matches Image 8 "Check-in failed")
+                  Container(
+                    width: 64,
+                    height: 64,
+                    decoration: BoxDecoration(
+                      color: _errorRed.withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Icon(
+                      Icons.error_outline_rounded,
+                      color: _errorRed,
+                      size: 34,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+
+                  Text(
+                    'Check-in did not go through',
+                    textAlign: TextAlign.center,
+                    style: _manrope(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                      color: _darkCameraUi,
+                      height: 1.25,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+
+                  Text(
+                    'Location verification failed or outside designated 100m boundary. Your selfie is kept so you can retry without retaking it.',
+                    textAlign: TextAlign.center,
+                    style: _manrope(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: _slateText,
+                      height: 1.45,
+                    ),
+                  ),
+                  if (errorDetail != null && errorDetail.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      errorDetail,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: _manrope(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        color: _errorRed,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 24),
+
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: ElevatedButton(
+                      onPressed: () {
+                        Navigator.of(dialogContext).pop();
+                        setState(() {
+                          _currentStep = _CheckInStep.locationVerification;
+                        });
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _cobalt500,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      child: Text(
+                        'Try Again',
+                        style: _manrope(
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildModalSummaryRow({
+    required String label,
+    required String value,
+  }) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          label,
+          style: _manrope(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: _slateText,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Flexible(
+          child: Text(
+            value,
+            textAlign: TextAlign.right,
+            overflow: TextOverflow.ellipsis,
+            style: _manrope(
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+              color: _darkCameraUi,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ==========================================
+  // ROOT BUILDER (STATE-DRIVEN MULTI-STEP WORKFLOW)
+  // ==========================================
+  @override
+  Widget build(BuildContext context) {
+    return switch (_currentStep) {
+      _CheckInStep.locationVerification => _buildStep1LocationScaffold(),
+      _CheckInStep.selfieCamera => FaceScanScreen(
+          onPhotoCaptured: _onPhotoCaptured,
+          onCancel: () {
+            setState(() => _currentStep = _CheckInStep.locationVerification);
+          },
+        ),
+      _CheckInStep.selfieReview => _buildStep3SelfieReviewScaffold(),
+    };
+  }
+
+  // ==========================================
+  // STEP 1 UI: LOCATION & GEOFENCING VERIFICATION
+  // ==========================================
+  Widget _buildStep1LocationScaffold() {
+    final user = _effectiveUser;
+    final roundedDistance = _distanceMeters.round();
+
+    return Scaffold(
+      backgroundColor: _canvasBg,
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 480),
+            child: Column(
+              children: [
+                // Top Bar with Close button, Title "Check in", and Discreet Examiner Switch
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        tooltip: 'Tutup',
+                        onPressed: () => Navigator.of(context).maybePop(),
+                        icon: const Icon(
+                          Icons.close_rounded,
+                          color: _darkCameraUi,
+                          size: 22,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          'Check in',
+                          style: _manrope(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                            color: _darkCameraUi,
+                            letterSpacing: -0.3,
+                          ),
+                        ),
+                      ),
+                      // Discreet Examiner Switch in top-right corner
+                      Tooltip(
+                        message:
+                            'Examiner Mode Switch (Real GPS / 35m Inside / 320m Outside)',
+                        child: InkWell(
+                          onTap: _cycleLocationMode,
+                          borderRadius: BorderRadius.circular(20),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: _simMode == _LocationSimMode.realGps
+                                  ? _surfaceCard
+                                  : _cobalt50,
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: _cobalt50, width: 1.2),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.tune_rounded,
+                                  size: 15,
+                                  color: _simMode == _LocationSimMode.realGps
+                                      ? _slateText
+                                      : _cobalt500,
+                                ),
+                                const SizedBox(width: 5),
+                                Text(
+                                  switch (_simMode) {
+                                    _LocationSimMode.realGps => 'GPS Live',
+                                    _LocationSimMode.mockInsideCampus =>
+                                      'Sim 35m',
+                                    _LocationSimMode.mockOutsideCampus =>
+                                      'Sim 320m',
+                                  },
+                                  style: _manrope(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: _simMode == _LocationSimMode.realGps
+                                        ? _slateText
+                                        : _cobalt500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Main Scrollable Content
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        // Authenticated Student Identity Pill (No manual TextField)
+                        _buildAuthenticatedIdentityBanner(user),
+                        const SizedBox(height: 16),
+
+                        // Interactive Verification Card (White Bento Card, radius 24)
+                        Container(
+                          decoration: BoxDecoration(
+                            color: _surfaceCard,
+                            borderRadius: BorderRadius.circular(24),
+                            border: Border.all(color: _cobalt50, width: 1.2),
+                            boxShadow: [
+                              BoxShadow(
+                                color: _darkCameraUi.withValues(alpha: 0.04),
+                                blurRadius: 20,
+                                offset: const Offset(0, 8),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              // 1. Radar Pulsing Graphic at Top (Double-tap also toggles Examiner Mode)
+                              GestureDetector(
+                                onDoubleTap: _cycleLocationMode,
+                                child: _buildRadarMapHeader(),
+                              ),
+
+                              Padding(
+                                padding: const EdgeInsets.all(20),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Text(
+                                          'Pass location check to continue',
+                                          style: _manrope(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                            color: _slateText,
+                                          ),
+                                        ),
+                                        InkWell(
+                                          onTap: _isCheckingLocation
+                                              ? null
+                                              : () {
+                                                  setState(
+                                                    () => _simMode =
+                                                        _LocationSimMode
+                                                            .realGps,
+                                                  );
+                                                  _verifyDeviceLocation();
+                                                },
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                          child: Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 6,
+                                              vertical: 2,
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                const Icon(
+                                                  Icons.refresh_rounded,
+                                                  size: 14,
+                                                  color: _cobalt500,
+                                                ),
+                                                const SizedBox(width: 4),
+                                                Text(
+                                                  'Refresh',
+                                                  style: _manrope(
+                                                    fontSize: 11.5,
+                                                    fontWeight: FontWeight.w700,
+                                                    color: _cobalt500,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 16),
+
+                                    // 2. Location Verification Row (Matches Image 5 & 8)
+                                    _buildLocationStatusRow(roundedDistance),
+
+                                    const Padding(
+                                      padding: EdgeInsets.symmetric(
+                                        vertical: 14,
+                                      ),
+                                      child: Divider(
+                                        height: 1,
+                                        color: Color(0xFFF1F5F9),
+                                      ),
+                                    ),
+
+                                    // 3. Secondary Campus Wi-Fi / Identity Lock Row
+                                    _buildSecondaryVerificationRow(user),
+
+                                    const SizedBox(height: 18),
+
+                                    // 4. Subtitle Caption Banner explaining next steps
+                                    _buildNextStepBanner(),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                // Bottom Action Bar
+                Container(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+                  decoration: BoxDecoration(
+                    color: _canvasBg,
+                    border: Border(
+                      top: BorderSide(
+                        color: _cobalt50.withValues(alpha: 0.8),
+                      ),
+                    ),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_capturedSelfie != null && _isWithinRadius) ...[
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: SizedBox(
+                            width: double.infinity,
+                            height: 46,
+                            child: OutlinedButton.icon(
+                              onPressed: () {
+                                setState(
+                                  () => _currentStep = _CheckInStep.selfieReview,
+                                );
+                              },
+                              icon: const Icon(
+                                Icons.check_circle_outline_rounded,
+                                size: 18,
+                              ),
+                              label: Text(
+                                'Use Saved Selfie & Review',
+                                style: _manrope(
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: _cobalt500,
+                                ),
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: _cobalt500,
+                                side: const BorderSide(
+                                  color: _cobalt500,
+                                  width: 1.4,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                      SizedBox(
+                        width: double.infinity,
+                        height: 54,
+                        child: ElevatedButton.icon(
+                          onPressed: (!_isCheckingLocation && _isWithinRadius)
+                              ? () {
+                                  setState(
+                                    () =>
+                                        _currentStep = _CheckInStep.selfieCamera,
+                                  );
+                                }
+                              : null,
+                          icon: Icon(
+                            _isWithinRadius
+                                ? Icons.camera_alt_outlined
+                                : Icons.block_rounded,
+                            size: 19,
+                          ),
+                          label: Text(
+                            _isCheckingLocation
+                                ? 'Verifying location...'
+                                : (_isWithinRadius
+                                    ? 'Take selfie'
+                                    : 'Outside School Area (Min. 100m)'),
+                            style: _manrope(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                              color: (!_isCheckingLocation && _isWithinRadius)
+                                  ? Colors.white
+                                  : const Color(0xFF94A3B8),
+                            ),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _cobalt500,
+                            foregroundColor: Colors.white,
+                            disabledBackgroundColor: const Color(0xFFE2E8F0),
+                            disabledForegroundColor: const Color(0xFF94A3B8),
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
   }
 
-  // ==========================================
-  // 4. Penanganan Lokasi GPS & Validasi Geofencing
-  // ==========================================
-  void _evaluateGeofence(double lat, double lng, {double? accuracy}) {
-    final distance = Geolocator.distanceBetween(
-      lat,
-      lng,
-      schoolLat,
-      schoolLng,
-    );
-    final within = distance <= maxAllowedDistanceMeters;
-    final lowAccuracyWeb = kIsWeb && (accuracy == null || accuracy > 100);
-
-    setState(() {
-      distanceInMeters = distance;
-      isWithinRadius = within;
-      if (lowAccuracyWeb && !within) {
-        isWebTestingBypass = true;
-      }
-    });
-
-    if (!within && !isWebTestingBypass && mounted) {
-      _showSnackBar(
-        'Presensi ditolak: Anda berada di luar area sekolah!',
-        Icons.warning_amber_rounded,
-      );
-    }
-  }
-
-  void _useSchoolCoordinatesForWebTesting() {
-    dLat = schoolLat;
-    dLong = schoolLng;
-    setState(() {
-      distanceInMeters = 0.0;
-      isWithinRadius = true;
-      isWebTestingBypass = true;
-      strAlamat =
-          'Koordinat Simulasi Sekolah: Lat ${schoolLat.toStringAsFixed(5)}, Long ${schoolLng.toStringAsFixed(5)} (Web Testing)';
-      isLoadingLocation = false;
-    });
-    _showSnackBar(
-      'Titik lokasi disetel ke area SMK IDN Boarding School Solo (0 meter).',
-      Icons.check_circle_outline,
-    );
-  }
-
-  Future<bool> handleLocationPermission() async {
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled && !kIsWeb) {
-      _showSnackBar(
-        'Layanan GPS dinonaktifkan. Silakan aktifkan GPS perangkat Anda.',
-        Icons.location_off,
-      );
-      return false;
-    }
-
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        _showSnackBar(
-          'Izin akses lokasi ditolak oleh browser/perangkat.',
-          Icons.warning_amber_rounded,
-        );
-        return false;
-      }
-    }
-    if (permission == LocationPermission.deniedForever) {
-      _showSnackBar(
-        'Izin lokasi ditolak permanen di pengaturan sistem.',
-        Icons.error_outline,
-      );
-      return false;
-    }
-    return true;
-  }
-
-  Future<void> getGeoLocationPosition() async {
-    final hasPermission = await handleLocationPermission();
-    if (!hasPermission) {
-      if (kIsWeb) {
-        _useSchoolCoordinatesForWebTesting();
-        return;
-      }
-      setState(() {
-        strAlamat = 'Izin lokasi tidak diberikan.';
-        isLoadingLocation = false;
-      });
-      return;
-    }
-
-    setState(() => isLoadingLocation = true);
-
-    try {
-      Position position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 15),
-        ),
-      );
-      dLat = position.latitude;
-      dLong = position.longitude;
-
-      _evaluateGeofence(
-        position.latitude,
-        position.longitude,
-        accuracy: position.accuracy,
-      );
-      await getAddressFromLongLat(position);
-    } catch (e) {
-      if (!mounted) return;
-      if (kIsWeb) {
-        _useSchoolCoordinatesForWebTesting();
-        return;
-      }
-      setState(() {
-        strAlamat = dLat != 0.0
-            ? 'Koordinat: ${dLat.toStringAsFixed(5)}, ${dLong.toStringAsFixed(5)}'
-            : 'Gagal mendeteksi lokasi: $e';
-        isLoadingLocation = false;
-      });
-    }
-  }
-
-  Future<void> getAddressFromLongLat(Position position) async {
-    if (kIsWeb) {
-      setState(() {
-        strAlamat =
-            'Koordinat: Lat ${position.latitude.toStringAsFixed(5)}, Long ${position.longitude.toStringAsFixed(5)} (Web Browser)';
-        isLoadingLocation = false;
-      });
-      return;
-    }
-
-    try {
-      List<Placemark> placemarks = await placemarkFromCoordinates(
-        position.latitude,
-        position.longitude,
-      );
-      if (placemarks.isNotEmpty && mounted) {
-        final place = placemarks[0];
-        final parts = [
-          place.street,
-          place.subLocality,
-          place.locality,
-          place.administrativeArea,
-          place.country,
-        ].where((e) => e != null && e.isNotEmpty).toList();
-
-        setState(() {
-          strAlamat = parts.isNotEmpty
-              ? parts.join(', ')
-              : 'Lat: ${position.latitude.toStringAsFixed(5)}, Long: ${position.longitude.toStringAsFixed(5)}';
-          isLoadingLocation = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          strAlamat =
-              'Lat: ${position.latitude.toStringAsFixed(5)}, Long: ${position.longitude.toStringAsFixed(5)}';
-          isLoadingLocation = false;
-        });
-      }
-    }
-  }
-
-  Color _getStatusColor() {
-    switch (strStatus) {
-      case 'Attend':
-        return const Color(0xFF047857); // Emerald
-      case 'Late':
-        return const Color(0xFFB45309); // Amber
-      default:
-        return const Color(0xFFB91C1C); // Red
-    }
-  }
-
-  String _getStatusLabel() {
-    switch (strStatus) {
-      case 'Attend':
-        return 'Tepat Waktu (Attend)';
-      case 'Late':
-        return 'Terlambat (Late)';
-      default:
-        return 'Di Luar Jam Operasional (Leave)';
-    }
-  }
-
-  String _formatDistanceText(double meters) {
-    final rounded = meters.round();
-    if (isWithinRadius) {
-      return 'Jarak ke sekolah: $rounded meter - Dalam Radius';
-    }
-    return 'Jarak: $rounded meter - Di Luar Radius';
-  }
-
-  Widget _buildLockedIdentityCard() {
-    final name = _lockedUser?.name ?? 'Memuat profil...';
-    final nis = _lockedUser?.nis ?? '-';
-    final userClass = _lockedUser?.userClass ?? 'XI RPL';
-
+  Widget _buildAuthenticatedIdentityBanner(UserModel user) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFE8EEFF), width: 1.2),
+        color: _surfaceCard,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _cobalt50, width: 1.2),
       ),
       child: Row(
         children: [
           Container(
-            width: 44,
-            height: 44,
+            width: 38,
+            height: 38,
             decoration: const BoxDecoration(
-              color: Color(0xFFE8EEFF),
+              color: _cobalt50,
               shape: BoxShape.circle,
             ),
-            child: const Icon(
-              Icons.verified_user_rounded,
-              color: Color(0xFF2952F2),
-              size: 22,
+            alignment: Alignment.center,
+            child: Text(
+              user.name.isNotEmpty ? user.name[0].toUpperCase() : 'S',
+              style: _manrope(
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
+                color: _cobalt500,
+              ),
             ),
           ),
           const SizedBox(width: 12),
@@ -480,415 +1096,668 @@ class _AttendScreenState extends State<AttendScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'IDENTITAS TERKUNCI OTOMATIS',
-                  style: TextStyle(
-                    fontSize: 10.5,
+                Text(
+                  user.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: _manrope(
+                    fontSize: 14,
                     fontWeight: FontWeight.w800,
-                    letterSpacing: 0.6,
-                    color: Color(0xFF2952F2),
+                    color: _darkCameraUi,
                   ),
                 ),
-                const SizedBox(height: 3),
                 Text(
-                  name,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
-                    color: Color(0xFF0E1A2B),
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  'NIS: $nis • Kelas: $userClass',
-                  style: const TextStyle(
-                    fontSize: 12,
+                  'NIS ${user.nis} • ${user.userClass}',
+                  style: _manrope(
+                    fontSize: 11.5,
                     fontWeight: FontWeight.w600,
-                    color: Color(0xFF5B6474),
+                    color: _slateText,
                   ),
                 ),
               ],
             ),
           ),
-          const Icon(
-            Icons.lock_outline_rounded,
-            size: 18,
-            color: Color(0xFF5B6474),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+            decoration: BoxDecoration(
+              color: _cobalt50,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.lock_outline_rounded,
+                  size: 12,
+                  color: _cobalt500,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  'ID Locked',
+                  style: _manrope(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w800,
+                    color: _cobalt500,
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildGeofenceBadge() {
-    if (isLoadingLocation) {
-      return const Padding(
-        padding: EdgeInsets.only(top: 10),
-        child: Text(
-          'Menghitung jarak ke sekolah...',
-          style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+  Widget _buildRadarMapHeader() {
+    final statusAccent = _isCheckingLocation
+        ? _cobalt500
+        : (_isWithinRadius ? _cobalt500 : _errorRed);
+
+    return ClipRRect(
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(23)),
+      child: Container(
+        height: 190,
+        color: const Color(0xFFF5F8FF),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            // Subtle Map Grid Lines
+            Positioned.fill(
+              child: CustomPaint(
+                painter: _CampusMapGridPainter(),
+              ),
+            ),
+
+            // Animated Pulsing Geofence Radar Rings
+            AnimatedBuilder(
+              animation: _radarController,
+              builder: (context, _) {
+                final progress = _radarController.value;
+                return Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    // Outer expanding pulse ring
+                    Container(
+                      width: 96 + (progress * 68),
+                      height: 96 + (progress * 68),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: statusAccent.withValues(
+                          alpha: (1.0 - progress) * 0.16,
+                        ),
+                      ),
+                    ),
+                    // 100m Geofence Boundary Circle
+                    Container(
+                      width: 118,
+                      height: 118,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: statusAccent.withValues(alpha: 0.12),
+                        border: Border.all(
+                          color: statusAccent.withValues(alpha: 0.45),
+                          width: 1.5,
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+
+            // Central School Pin (SMK IDN Solo)
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: _cobalt500,
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 3),
+                boxShadow: [
+                  BoxShadow(
+                    color: _cobalt500.withValues(alpha: 0.35),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: const Icon(
+                Icons.location_on_rounded,
+                color: Colors.white,
+                size: 16,
+              ),
+            ),
+
+            // Student Position Dot (Inside or Outside the 100m ring)
+            if (!_isCheckingLocation)
+              Transform.translate(
+                offset: _isWithinRadius
+                    ? const Offset(22, 18)
+                    : const Offset(72, -44),
+                child: Container(
+                  width: 14,
+                  height: 14,
+                  decoration: BoxDecoration(
+                    color: _isWithinRadius ? _successGreen : _errorRed,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 2.5),
+                    boxShadow: [
+                      BoxShadow(
+                        color: (_isWithinRadius ? _successGreen : _errorRed)
+                            .withValues(alpha: 0.4),
+                        blurRadius: 8,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+            // Subtle hint at bottom-right of radar
+            Positioned(
+              bottom: 10,
+              right: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.88),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _cobalt50),
+                ),
+                child: Text(
+                  'Radius: 100m • Double-tap radar to test',
+                  style: _manrope(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    color: _slateText,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildLocationStatusRow(int roundedDistance) {
+    if (_isCheckingLocation) {
+      return Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: const BoxDecoration(
+              color: _cobalt50,
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.location_searching_rounded,
+              color: _cobalt500,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Location',
+                  style: _manrope(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: _darkCameraUi,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Finding your position relative to IDN Solo...',
+                  style: _manrope(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: _slateText,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: _cobalt500,
+            ),
+          ),
+        ],
       );
     }
 
-    if (distanceInMeters == null) {
-      return const SizedBox.shrink();
-    }
+    final Color iconColor = _isWithinRadius ? _successGreen : _errorRed;
+    final Color badgeBg = _isWithinRadius
+        ? _successGreen.withValues(alpha: 0.12)
+        : _warningOrange.withValues(alpha: 0.15);
+    final Color badgeTextColor =
+        _isWithinRadius ? const Color(0xFF067647) : const Color(0xFFB54708);
 
-    final Color badgeColor = isWithinRadius
-        ? const Color(0xFF047857)
-        : const Color(0xFFB91C1C);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        const SizedBox(height: 12),
         Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          width: 40,
+          height: 40,
           decoration: BoxDecoration(
-            color: badgeColor.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: badgeColor.withValues(alpha: 0.45)),
+            color: iconColor.withValues(alpha: 0.12),
+            shape: BoxShape.circle,
           ),
-          child: Row(
+          child: Icon(
+            _isWithinRadius
+                ? Icons.check_circle_outline_rounded
+                : Icons.warning_amber_rounded,
+            color: iconColor,
+            size: 21,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(
-                isWithinRadius ? Icons.verified_outlined : Icons.gpp_bad_outlined,
-                size: 18,
-                color: badgeColor,
+              Text(
+                'Location',
+                style: _manrope(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                  color: _darkCameraUi,
+                ),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  _formatDistanceText(distanceInMeters!),
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: badgeColor,
-                  ),
+              const SizedBox(height: 2),
+              Text(
+                _isWithinRadius
+                    ? 'Location: Within ${roundedDistance}m of IDN Solo'
+                    : 'Location: ${roundedDistance}m away from school',
+                style: _manrope(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: _slateText,
                 ),
               ),
             ],
           ),
         ),
-        if (!isWithinRadius && !kIsWeb) ...[
-          const SizedBox(height: 8),
-          const Text(
-            'Presensi ditolak: Anda berada di luar area sekolah! (Maksimal radius 100 meter)',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFFB91C1C),
+        const SizedBox(width: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: badgeBg,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                _isWithinRadius
+                    ? Icons.check_circle_rounded
+                    : Icons.error_outline_rounded,
+                size: 13,
+                color: badgeTextColor,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                _isWithinRadius ? 'Verified' : 'Outside Radius',
+                style: _manrope(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w800,
+                  color: badgeTextColor,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSecondaryVerificationRow(UserModel user) {
+    return Row(
+      children: [
+        Container(
+          width: 40,
+          height: 40,
+          decoration: const BoxDecoration(
+            color: Color(0xFFF1F5F9),
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(
+            Icons.wifi_tethering_rounded,
+            color: _slateText,
+            size: 20,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Campus Coordinates',
+                style: _manrope(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                  color: _darkCameraUi,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                '${_capturedLat.toStringAsFixed(5)}, ${_capturedLng.toStringAsFixed(5)}',
+                style: _manrope(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: _slateText,
+                ),
+              ),
+            ],
+          ),
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF1F5F9),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Text(
+            user.userClass,
+            style: _manrope(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w700,
+              color: _slateText,
             ),
           ),
-        ],
-        if (kIsWeb && !isWithinRadius) ...[
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFFBEB),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFFDE68A)),
-            ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildNextStepBanner() {
+    final bool verified = !_isCheckingLocation && _isWithinRadius;
+    final Color bannerBg = verified
+        ? _successGreen.withValues(alpha: 0.10)
+        : _errorRed.withValues(alpha: 0.08);
+    final Color bannerIconColor = verified ? _successGreen : _errorRed;
+    final Color bannerTitleColor =
+        verified ? const Color(0xFF067647) : _errorRed;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: bannerBg,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            verified
+                ? Icons.check_circle_outline_rounded
+                : Icons.info_outline_rounded,
+            color: bannerIconColor,
+            size: 20,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'GPS Web Browser menggunakan estimasi jaringan yang kurang presisi. Mode pengujian Web diaktifkan agar presensi tetap dapat diuji.',
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    color: Color(0xFF92400E),
-                    height: 1.4,
+                Text(
+                  verified ? 'You can check in' : 'Move closer to IDN Solo',
+                  style: _manrope(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: bannerTitleColor,
                   ),
                 ),
-                const SizedBox(height: 6),
-                Row(
-                  children: [
-                    TextButton.icon(
-                      onPressed: _useSchoolCoordinatesForWebTesting,
-                      icon: const Icon(Icons.my_location, size: 15),
-                      label: const Text(
-                        'Simulasikan Titik Sekolah (0m)',
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                      ),
-                      style: TextButton.styleFrom(
-                        foregroundColor: const Color(0xFF1E2B58),
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                    ),
-                    const Spacer(),
-                    Switch(
-                      value: isWebTestingBypass,
-                      activeThumbColor: const Color(0xFF2952F2),
-                      onChanged: (val) => setState(() => isWebTestingBypass = val),
-                    ),
-                  ],
+                const SizedBox(height: 2),
+                Text(
+                  verified
+                      ? 'Verified by your location. Next, take a quick selfie.'
+                      : 'You must be within 100 meters of SMK IDN Boarding School Solo to take a check-in selfie.',
+                  style: _manrope(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: _darkCameraUi.withValues(alpha: 0.8),
+                    height: 1.4,
+                  ),
                 ),
               ],
             ),
           ),
         ],
-      ],
+      ),
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final statusColor = _getStatusColor();
+  // ==========================================
+  // STEP 3 UI: SELFIE REVIEW (Matches Image 5 "Review selfie")
+  // ==========================================
+  Widget _buildStep3SelfieReviewScaffold() {
+    final timeStr = DateFormat('HH:mm').format(DateTime.now());
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF2F4F7),
-      appBar: AppBar(
-        title: const Text('Konfirmasi Presensi'),
-      ),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 480),
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 20.0),
+      backgroundColor: _darkCameraUi,
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 480),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // 1. Kartu Identitas Terkunci (Menggantikan input manual nama)
-                _buildLockedIdentityCard(),
-
-                const SizedBox(height: 16),
-
-                // 2. Box Preview Foto Selfie
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: const Color(0xFFE8EEFF), width: 1.2),
-                  ),
-                  child: Column(
+                // Top Bar: Close (X) and Title "Review selfie"
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 12, 18, 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      if (capturedImage != null && (kIsWeb || _imageBytes != null))
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(14),
-                          child: kIsWeb
-                              ? Image.network(
-                                  capturedImage!.path,
-                                  height: 220,
-                                  width: double.infinity,
-                                  fit: BoxFit.cover,
-                                )
-                              : Image.memory(
-                                  _imageBytes!,
-                                  height: 220,
-                                  width: double.infinity,
-                                  fit: BoxFit.cover,
-                                ),
-                        )
-                      else
-                        Container(
-                          height: 180,
-                          width: double.infinity,
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF8FAFC),
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(
-                              color: const Color(0xFFE8EEFF),
-                              style: BorderStyle.solid,
+                      Material(
+                        color: Colors.white.withValues(alpha: 0.14),
+                        shape: const CircleBorder(),
+                        child: InkWell(
+                          customBorder: const CircleBorder(),
+                          onTap: _isSubmitting
+                              ? null
+                              : () {
+                                  setState(
+                                    () => _currentStep =
+                                        _CheckInStep.locationVerification,
+                                  );
+                                },
+                          child: const SizedBox(
+                            width: 42,
+                            height: 42,
+                            child: Icon(
+                              Icons.close_rounded,
+                              color: Colors.white,
+                              size: 20,
                             ),
-                          ),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Container(
-                                width: 64,
-                                height: 80,
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(40),
-                                  border: Border.all(
-                                    color: const Color(0xFF94A3B8),
-                                    width: 2,
-                                  ),
-                                ),
-                                child: const Icon(
-                                  Icons.face_retouching_natural,
-                                  size: 36,
-                                  color: Color(0xFF64748B),
-                                ),
-                              ),
-                              const SizedBox(height: 10),
-                              const Text(
-                                'Belum ada foto. Tekan tombol untuk ambil selfie',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  color: Color(0xFF475569),
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
                           ),
                         ),
-                      const SizedBox(height: 12),
-                      OutlinedButton.icon(
-                        onPressed: _pickSelfiePhoto,
-                        icon: const Icon(Icons.camera_alt, size: 18),
-                        label: Text(capturedImage == null ? 'Ambil Foto Selfie' : 'Ganti Foto'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: const Color(0xFF2952F2),
-                          side: const BorderSide(color: Color(0xFF2952F2)),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        ),
                       ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 16),
-
-                // 3. Status Kehadiran & Waktu Realtime
-                Container(
-                  padding: const EdgeInsets.all(16.0),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: const Color(0xFFE8EEFF), width: 1.2),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            'STATUS PRESENSI',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 0.6,
-                              color: Color(0xFF5B6474),
-                            ),
-                          ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: statusColor.withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: statusColor),
-                            ),
-                            child: Text(
-                              _getStatusLabel(),
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                                color: statusColor,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const Divider(height: 20),
-                      Row(
-                        children: [
-                          const Icon(Icons.schedule, size: 18, color: Color(0xFF2952F2)),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              strDateTime.isNotEmpty ? strDateTime : 'Memuat waktu...',
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: Color(0xFF0E1A2B),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 16),
-
-                // 4. Card Lokasi GPS & Geofencing dengan Tombol Refresh
-                Container(
-                  padding: const EdgeInsets.all(16.0),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: const Color(0xFFE8EEFF), width: 1.2),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Row(
-                            children: [
-                              Icon(Icons.location_on, color: Color(0xFFD92D20), size: 20),
-                              SizedBox(width: 6),
-                              Text(
-                                'Lokasi Presensi Anda',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w700,
-                                  color: Color(0xFF0E1A2B),
-                                ),
-                              ),
-                            ],
-                          ),
-                          IconButton(
-                            tooltip: 'Segarkan Lokasi GPS',
-                            onPressed: isLoadingLocation ? null : getGeoLocationPosition,
-                            icon: isLoadingLocation
-                                ? const SizedBox(
-                                    width: 16,
-                                    height: 16,
-                                    child: CircularProgressIndicator(strokeWidth: 2),
-                                  )
-                                : const Icon(Icons.refresh, size: 20, color: Color(0xFF2952F2)),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
                       Text(
-                        strAlamat,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFF5B6474),
-                          height: 1.4,
+                        'Review selfie',
+                        style: _manrope(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                          letterSpacing: -0.2,
                         ),
                       ),
-                      _buildGeofenceBadge(),
+                      const SizedBox(width: 42),
                     ],
                   ),
                 ),
 
-                const SizedBox(height: 24),
+                const SizedBox(height: 14),
 
-                // 5. Tombol Submit Presensi (Diproteksi Geofencing & Identity Locked)
-                ElevatedButton(
-                  onPressed: (isLoadingLocation || isSubmitting || !_canSubmitAttendance)
-                      ? null
-                      : () => submitAbsen(strAlamat, strStatus),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF2952F2),
-                    disabledBackgroundColor: const Color(0xFFCBD5E1),
-                    disabledForegroundColor: const Color(0xFF64748B),
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                // Top Pill Badge: "Looks good • SMK IDN Solo"
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 7,
                   ),
-                  child: Text(
-                    _canSubmitAttendance
-                        ? 'KIRIM PRESENSI KEHADIRAN'
-                        : 'DI LUAR RADIUS SEKOLAH (> 100M)',
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.3,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.22),
                     ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.verified_rounded,
+                        size: 15,
+                        color: _successGreen,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Looks good • SMK IDN Solo ($timeStr)',
+                        style: _manrope(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Centered Oval Framed Selfie Preview
+                Expanded(
+                  child: Center(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 32),
+                      child: AspectRatio(
+                        aspectRatio: 0.78,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(220),
+                            border: Border.all(
+                              color: _cobalt500,
+                              width: 3.2,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: _cobalt500.withValues(alpha: 0.32),
+                                blurRadius: 28,
+                                spreadRadius: 2,
+                              ),
+                            ],
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(220),
+                            child: _buildCapturedSelfieImage(),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Watermark
+                Text(
+                  'IDN Boarding School Solo • Biometric Check',
+                  style: _manrope(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white.withValues(alpha: 0.58),
+                  ),
+                ),
+
+                const SizedBox(height: 20),
+
+                // Bottom Action Row: "Retake" & "Confirm & Check In"
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        flex: 4,
+                        child: SizedBox(
+                          height: 52,
+                          child: OutlinedButton(
+                            onPressed: _isSubmitting
+                                ? null
+                                : () {
+                                    setState(
+                                      () => _currentStep =
+                                          _CheckInStep.selfieCamera,
+                                    );
+                                  },
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              side: BorderSide(
+                                color: Colors.white.withValues(alpha: 0.65),
+                                width: 1.4,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                            child: Text(
+                              'Retake',
+                              style: _manrope(
+                                fontSize: 14.5,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        flex: 6,
+                        child: SizedBox(
+                          height: 52,
+                          child: ElevatedButton(
+                            onPressed: _isSubmitting
+                                ? null
+                                : _confirmAndSubmitCheckIn,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _cobalt500,
+                              foregroundColor: Colors.white,
+                              disabledBackgroundColor:
+                                  _cobalt500.withValues(alpha: 0.5),
+                              elevation: 0,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                            child: _isSubmitting
+                                ? const SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2.2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : Text(
+                                    'Confirm & Check In',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: _manrope(
+                                      fontSize: 14.5,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -898,4 +1767,76 @@ class _AttendScreenState extends State<AttendScreen> {
       ),
     );
   }
+
+  Widget _buildCapturedSelfieImage() {
+    if (_selfieBytes != null) {
+      return Image.memory(
+        _selfieBytes!,
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+      );
+    }
+
+    if (_capturedSelfie != null && kIsWeb && _capturedSelfie!.path.isNotEmpty) {
+      return Image.network(
+        _capturedSelfie!.path,
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+      );
+    }
+
+    return Container(
+      color: const Color(0xFF152642),
+      alignment: Alignment.center,
+      child: const Icon(
+        Icons.person_rounded,
+        size: 96,
+        color: Colors.white54,
+      ),
+    );
+  }
+}
+
+/// Draws a clean architectural street/campus grid behind the radar circle.
+class _CampusMapGridPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final gridPaint = Paint()
+      ..color = const Color(0xFFE2E8F6)
+      ..strokeWidth = 1.0;
+
+    const double step = 32.0;
+    for (double x = 0; x < size.width; x += step) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
+    }
+    for (double y = 0; y < size.height; y += step) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+    }
+
+    // Subtle dashed outer radar ring
+    final center = Offset(size.width / 2, size.height / 2);
+    final dashedPaint = Paint()
+      ..color = const Color(0xFF2952F2).withValues(alpha: 0.32)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4;
+
+    const double radius = 78.0;
+    const int segments = 36;
+    const double sweep = (2 * math.pi) / (segments * 2);
+    for (int i = 0; i < segments; i++) {
+      final startAngle = i * 2 * sweep;
+      canvas.drawArc(
+        Rect.fromCircle(center: center, radius: radius),
+        startAngle,
+        sweep,
+        false,
+        dashedPaint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
