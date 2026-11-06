@@ -77,9 +77,9 @@ class AttendanceService {
         return !isPermission &&
             (desc.contains('late') || desc.contains('terlambat'));
       case 'Izin':
+        return desc.contains('izin') || desc.contains('dispensasi');
       case 'Sakit':
-        return desc.startsWith(filter.toLowerCase()) ||
-            desc.contains(filter.toLowerCase());
+        return desc.startsWith('sakit') || desc.contains('sakit');
       default:
         return desc.contains(filter.toLowerCase());
     }
