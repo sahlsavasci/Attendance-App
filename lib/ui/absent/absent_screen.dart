@@ -12,16 +12,16 @@ class AbsentScreen extends StatefulWidget {
 class _AbsentScreenState extends State<AbsentScreen> {
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _reasonController = TextEditingController();
-  
+
   DateTime? _startDate;
   DateTime? _endDate;
 
-  String _selectedCategory = "Sakit";
-  final List<String> _categories = ["Sakit", "Izin", "Lainnya"];
+  String _selectedCategory = 'Sakit';
+  final List<String> _categories = ['Sakit', 'Izin', 'Lainnya'];
 
   bool _isLoading = false;
-  
-  final CollectionReference _dataCollection =
+
+  final CollectionReference dataCollection =
       FirebaseFirestore.instance.collection('attendance');
 
   @override
@@ -32,7 +32,7 @@ class _AbsentScreenState extends State<AbsentScreen> {
   }
 
   String _formatDate(DateTime? date) {
-    if (date == null) return "Pilih tanggal";
+    if (date == null) return 'Pilih tanggal';
     try {
       return DateFormat('dd MMMM yyyy', 'id_ID').format(date);
     } catch (_) {
@@ -46,7 +46,7 @@ class _AbsentScreenState extends State<AbsentScreen> {
       initialDate: _startDate ?? DateTime.now(),
       firstDate: DateTime(2023),
       lastDate: DateTime(2030),
-      helpText: "PILIH TANGGAL MULAI IZIN",
+      helpText: 'PILIH TANGGAL MULAI IZIN',
     );
     if (picked != null) {
       setState(() {
@@ -64,7 +64,7 @@ class _AbsentScreenState extends State<AbsentScreen> {
       initialDate: _endDate ?? _startDate ?? DateTime.now(),
       firstDate: _startDate ?? DateTime(2023),
       lastDate: DateTime(2030),
-      helpText: "PILIH TANGGAL SELESAI IZIN",
+      helpText: 'PILIH TANGGAL SELESAI IZIN',
     );
     if (picked != null) {
       setState(() {
@@ -73,17 +73,17 @@ class _AbsentScreenState extends State<AbsentScreen> {
     }
   }
 
-  Future<void> _submitPermission() async {
+  Future<void> submitPermission() async {
     final name = _nameController.text.trim();
     final reason = _reasonController.text.trim();
 
     if (name.isEmpty) {
-      _showSnackBar("Harap isi nama lengkap Anda!", Icons.warning_amber_rounded);
+      _showSnackBar('Harap isi nama lengkap Anda!', Icons.warning_amber_rounded);
       return;
     }
 
     if (_startDate == null || _endDate == null) {
-      _showSnackBar("Harap tentukan tanggal mulai dan selesai izin!", Icons.warning_amber_rounded);
+      _showSnackBar('Harap tentukan tanggal mulai dan selesai izin!', Icons.warning_amber_rounded);
       return;
     }
 
@@ -91,32 +91,32 @@ class _AbsentScreenState extends State<AbsentScreen> {
 
     final startStr = DateFormat('dd/MM/yyyy').format(_startDate!);
     final endStr = DateFormat('dd/MM/yyyy').format(_endDate!);
-    final dateRangeStr = startStr == endStr ? startStr : "$startStr - $endStr";
+    final dateRangeStr = startStr == endStr ? startStr : '$startStr - $endStr';
 
     final descriptionText = reason.isNotEmpty
-        ? "$_selectedCategory: $reason"
+        ? '$_selectedCategory: $reason'
         : _selectedCategory;
 
     try {
-      await _dataCollection.add({
+      await dataCollection.add({
         'name': name,
         'address': '-',
         'description': descriptionText,
         'datetime': dateRangeStr,
         'type': 'permission',
         'category': _selectedCategory,
-        'reason': reason,
+        'reason': _reasonController.text.trim(),
         'start_date': Timestamp.fromDate(_startDate!),
         'end_date': Timestamp.fromDate(_endDate!),
         'created_at': FieldValue.serverTimestamp(),
       });
 
       if (!mounted) return;
-      _showSnackBar("Pengajuan izin berhasil tersimpan!", Icons.check_circle_outline);
+      _showSnackBar('Pengajuan izin berhasil tersimpan!', Icons.check_circle_outline);
       Navigator.pop(context);
     } catch (e) {
       if (!mounted) return;
-      _showSnackBar("Gagal mengirim pengajuan izin: $e", Icons.error_outline);
+      _showSnackBar('Gagal mengirim pengajuan izin: $e', Icons.error_outline);
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -150,7 +150,7 @@ class _AbsentScreenState extends State<AbsentScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
-        title: const Text("Pengajuan Izin & Sakit"),
+        title: const Text('Pengajuan Izin & Sakit'),
       ),
       body: Center(
         child: ConstrainedBox(
@@ -175,7 +175,7 @@ class _AbsentScreenState extends State<AbsentScreen> {
                       SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          "Pengajuan izin atau sakit akan diverifikasi oleh wali kelas dan tercatat di riwayat kehadiran XI RPL.",
+                          'Pengajuan izin atau sakit akan tercatat langsung di riwayat kehadiran XI RPL.',
                           style: TextStyle(
                             fontSize: 12,
                             color: Color(0xFF1E3A8A),
@@ -191,66 +191,52 @@ class _AbsentScreenState extends State<AbsentScreen> {
 
                 // 1. Input Nama Lengkap
                 const Text(
-                  "NAMA SISWA",
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF64748B), letterSpacing: 0.6),
+                  'NAMA SISWA',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF475569), letterSpacing: 0.6),
                 ),
                 const SizedBox(height: 6),
                 TextField(
                   controller: _nameController,
                   decoration: const InputDecoration(
-                    hintText: "Nama lengkap sesuai presensi",
+                    labelText: 'Nama Lengkap Siswa',
+                    hintText: 'Nama lengkap sesuai presensi',
                     prefixIcon: Icon(Icons.person_outline, color: Color(0xFF64748B)),
                   ),
                 ),
 
                 const SizedBox(height: 20),
 
-                // 2. Kategori Izin (Segmented Buttons)
+                // 2. Kategori Izin
                 const Text(
-                  "KATEGORI PERIZINAN",
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF64748B), letterSpacing: 0.6),
+                  'KATEGORI PERIZINAN',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF475569), letterSpacing: 0.6),
                 ),
-                const SizedBox(height: 8),
-                Row(
-                  children: _categories.map((category) {
-                    final isSelected = _selectedCategory == category;
-                    return Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4.0),
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(10),
-                          onTap: () => setState(() => _selectedCategory = category),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            decoration: BoxDecoration(
-                              color: isSelected ? const Color(0xFF1E2B58) : Colors.white,
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(
-                                color: isSelected ? const Color(0xFF1E2B58) : const Color(0xFFCBD5E1),
-                              ),
-                            ),
-                            alignment: Alignment.center,
-                            child: Text(
-                              category,
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                                color: isSelected ? Colors.white : const Color(0xFF334155),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
+                const SizedBox(height: 6),
+                DropdownButtonFormField<String>(
+                  initialValue: _selectedCategory,
+                  decoration: const InputDecoration(
+                    labelText: 'Kategori Izin',
+                    prefixIcon: Icon(Icons.category_outlined, color: Color(0xFF64748B)),
+                  ),
+                  items: _categories.map((category) {
+                    return DropdownMenuItem<String>(
+                      value: category,
+                      child: Text(category),
                     );
                   }).toList(),
+                  onChanged: (val) {
+                    if (val != null) {
+                      setState(() => _selectedCategory = val);
+                    }
+                  },
                 ),
 
                 const SizedBox(height: 20),
 
                 // 3. Rentang Waktu
                 const Text(
-                  "RENTANG WAKTU IZIN",
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF64748B), letterSpacing: 0.6),
+                  'RENTANG WAKTU IZIN',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF475569), letterSpacing: 0.6),
                 ),
                 const SizedBox(height: 8),
                 Row(
@@ -273,7 +259,7 @@ class _AbsentScreenState extends State<AbsentScreen> {
                                 children: [
                                   Icon(Icons.calendar_today, size: 14, color: Color(0xFF2563EB)),
                                   SizedBox(width: 6),
-                                  Text("Mulai", style: TextStyle(fontSize: 11, color: Color(0xFF64748B), fontWeight: FontWeight.w600)),
+                                  Text('Mulai', style: TextStyle(fontSize: 11, color: Color(0xFF475569), fontWeight: FontWeight.w600)),
                                 ],
                               ),
                               const SizedBox(height: 6),
@@ -305,7 +291,7 @@ class _AbsentScreenState extends State<AbsentScreen> {
                                 children: [
                                   Icon(Icons.event, size: 14, color: Color(0xFF2563EB)),
                                   SizedBox(width: 6),
-                                  Text("Sampai", style: TextStyle(fontSize: 11, color: Color(0xFF64748B), fontWeight: FontWeight.w600)),
+                                  Text('Sampai', style: TextStyle(fontSize: 11, color: Color(0xFF475569), fontWeight: FontWeight.w600)),
                                 ],
                               ),
                               const SizedBox(height: 6),
@@ -325,15 +311,18 @@ class _AbsentScreenState extends State<AbsentScreen> {
 
                 // 4. Keterangan / Alasan
                 const Text(
-                  "KETERANGAN / ALASAN (OPSIONAL)",
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF64748B), letterSpacing: 0.6),
+                  'KETERANGAN / ALASAN (OPSIONAL)',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF475569), letterSpacing: 0.6),
                 ),
                 const SizedBox(height: 6),
                 TextField(
                   controller: _reasonController,
                   maxLines: 3,
                   decoration: const InputDecoration(
-                    hintText: "Tuliskan alasan izin atau diagnosis sakit...",
+                    labelText: 'Alasan (Opsional)',
+                    hintText: 'Tuliskan alasan izin atau diagnosis sakit...',
+                    alignLabelWithHint: true,
+                    prefixIcon: Icon(Icons.notes, color: Color(0xFF64748B)),
                   ),
                 ),
 
@@ -341,7 +330,7 @@ class _AbsentScreenState extends State<AbsentScreen> {
 
                 // Tombol Kirim
                 ElevatedButton(
-                  onPressed: _isLoading ? null : _submitPermission,
+                  onPressed: _isLoading ? null : submitPermission,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF1E2B58),
                     padding: const EdgeInsets.symmetric(vertical: 16),
@@ -353,7 +342,7 @@ class _AbsentScreenState extends State<AbsentScreen> {
                           child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
                         )
                       : const Text(
-                          "KIRIM PENGAJUAN IZIN",
+                          'KIRIM PENGAJUAN IZIN',
                           style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, letterSpacing: 0.3),
                         ),
                 ),
