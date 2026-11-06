@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
+import 'package:attendance_app/models/attendance_model.dart';
+import 'package:attendance_app/services/attendance_service.dart';
 import 'package:attendance_app/ui/attend/attend_screen.dart';
 import 'package:attendance_app/ui/absent/absent_screen.dart';
 import 'package:attendance_app/ui/attendance_history/history_screen.dart';
@@ -13,15 +16,31 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  static const _navy = Color(0xFF1E2B58);
-  static const _royalBlue = Color(0xFF2563EB);
+  // ==========================================
+  // Design System Tokens: Orbit Work - Bento Minimal
+  // ==========================================
+  static const Color _canvasBg = Color(0xFFF2F4F7);
+  static const Color _cardSurface = Color(0xFFFFFFFF);
+  static const Color _cobalt500 = Color(0xFF2952F2);
+  static const Color _cobalt700 = Color(0xFF1A36A6);
+  static const Color _cobalt50 = Color(0xFFE8EEFF);
+  static const Color _inkText = Color(0xFF0E1A2B);
+  static const Color _slateText = Color(0xFF5B6474);
+  static const Color _successGreen = Color(0xFF12B76A);
+  static const Color _warningOrange = Color(0xFFF79009);
+  static const Color _errorRed = Color(0xFFD92D20);
+  static const Color _auroraSky = Color(0xFF9BDCFF);
+  static const Color _auroraMint = Color(0xFFA6F3E4);
 
+  final AttendanceService _attendanceService = AttendanceService();
+  late final Stream<List<AttendanceModel>> _historyStream;
   late Timer _clockTimer;
   DateTime _now = DateTime.now();
 
   @override
   void initState() {
     super.initState();
+    _historyStream = _attendanceService.streamAttendanceHistory();
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) {
         setState(() => _now = DateTime.now());
@@ -35,16 +54,32 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
+  TextStyle _manrope({
+    required double fontSize,
+    required FontWeight fontWeight,
+    required Color color,
+    double? letterSpacing,
+    double? height,
+  }) {
+    return GoogleFonts.manrope(
+      fontSize: fontSize,
+      fontWeight: fontWeight,
+      color: color,
+      letterSpacing: letterSpacing,
+      height: height,
+    );
+  }
+
   String _getGreeting() {
     final hour = _now.hour;
     if (hour >= 4 && hour < 11) {
-      return 'Selamat Pagi';
+      return 'Selamat Pagi,';
     } else if (hour >= 11 && hour < 15) {
-      return 'Selamat Siang';
+      return 'Selamat Siang,';
     } else if (hour >= 15 && hour < 18) {
-      return 'Selamat Sore';
+      return 'Selamat Sore,';
     } else {
-      return 'Selamat Malam';
+      return 'Selamat Malam,';
     }
   }
 
@@ -60,38 +95,39 @@ class _HomeScreenState extends State<HomeScreen> {
     return DateFormat('HH:mm:ss').format(_now);
   }
 
-  String _getCurrentStatusCode() {
+  _ShiftStatusInfo _getShiftStatus() {
     final h = _now.hour;
     final m = _now.minute;
+
     if (h < 8 || (h == 8 && m <= 30)) {
-      return 'Attend';
+      return const _ShiftStatusInfo(
+        label: 'Tepat Waktu',
+        dotColor: _successGreen,
+        bgTint: _cobalt50,
+        textColor: _inkText,
+        caption: 'Sesi presensi pagi aktif • Hadir sebelum 08:30 WIB',
+      );
     } else if ((h > 8 && h < 18) || (h == 8 && m >= 31)) {
-      return 'Late';
+      return _ShiftStatusInfo(
+        label: 'Terlambat',
+        dotColor: _warningOrange,
+        bgTint: _warningOrange.withValues(alpha: 0.12),
+        textColor: const Color(0xFFB54708),
+        caption: 'Melewati pukul 08:30 WIB • Tercatat sebagai terlambat',
+      );
     } else {
-      return 'Leave';
+      return _ShiftStatusInfo(
+        label: 'Di Luar Jam',
+        dotColor: _errorRed,
+        bgTint: _errorRed.withValues(alpha: 0.10),
+        textColor: _errorRed,
+        caption: 'Jam sekolah berakhir (08:30 – 18:00 WIB)',
+      );
     }
   }
 
-  String _getCurrentStatusLabel(String code) {
-    switch (code) {
-      case 'Attend':
-        return 'Sesi Tepat Waktu (Attend)';
-      case 'Late':
-        return 'Melewati 08:30 (Late)';
-      default:
-        return 'Di Luar Jam Operasional (Leave)';
-    }
-  }
-
-  Color _getCurrentStatusColor(String code) {
-    switch (code) {
-      case 'Attend':
-        return const Color(0xFF047857);
-      case 'Late':
-        return const Color(0xFFB45309);
-      default:
-        return const Color(0xFFB91C1C);
-    }
+  bool _isSameDay(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
   }
 
   void _navigateTo(Widget screen) {
@@ -101,226 +137,196 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void _showSystemInfoDialog() {
-    showDialog(
+  void _showAttendanceRulesSheet() {
+    showModalBottomSheet(
       context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        title: const Row(
-          children: [
-            Icon(Icons.school, color: _navy),
-            SizedBox(width: 8),
-            Text(
-              'IDN Boarding School',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-          ],
-        ),
-        content: const Text(
-          'Sistem Presensi Digital Siswa XI RPL.\n'
-          'Gunakan menu Presensi Kehadiran untuk check-in mandiri dan menu Izin & Sakit untuk pengajuan ketidakhadiran.',
-          style: TextStyle(height: 1.4, color: Color(0xFF475569)),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Tutup'),
-          ),
-        ],
+      backgroundColor: _cardSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFD0D5DD),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Row(
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: _cobalt50,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.verified_user_outlined,
+                        color: _cobalt500,
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Aturan Presensi XI RPL',
+                            style: _manrope(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
+                              color: _inkText,
+                            ),
+                          ),
+                          Text(
+                            'SMK IDN Boarding School Solo',
+                            style: _manrope(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              color: _slateText,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                _buildRuleRow(
+                  icon: Icons.schedule_outlined,
+                  title: 'Batas Jam Kehadiran',
+                  subtitle:
+                      'Check-in sebelum 08:30 WIB tercatat Tepat Waktu (Attend). Pukul 08:31–17:59 WIB tercatat Terlambat (Late).',
+                ),
+                const SizedBox(height: 14),
+                _buildRuleRow(
+                  icon: Icons.my_location_outlined,
+                  title: 'Radius Geofencing 100 Meter',
+                  subtitle:
+                      'Wajib berada di dalam area SMK IDN Solo (maksimal 100m dari titik sekolah) dan melampirkan foto selfie.',
+                ),
+                const SizedBox(height: 14),
+                _buildRuleRow(
+                  icon: Icons.event_note_outlined,
+                  title: 'Izin & Sakit',
+                  subtitle:
+                      'Gunakan kartu Izin / Sakit apabila berhalangan hadir agar tercatat di log kelas.',
+                ),
+                const SizedBox(height: 22),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(sheetContext),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _cobalt500,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    child: Text(
+                      'Mengerti',
+                      style: _manrope(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
-  List<_MenuActionItem> _buildMenuItems() {
-    return [
-      _MenuActionItem(
-        title: 'Presensi Kehadiran',
-        subtitle: 'Catat kehadiran hari ini beserta foto selfie, koordinat GPS & waktu',
-        badgeText: 'Check-in',
-        badgeColor: const Color(0xFF047857),
-        icon: Icons.camera_alt_outlined,
-        iconColor: _royalBlue,
-        iconBg: const Color(0xFFEFF6FF),
-        imageAsset: 'assets/images/ic_absen.png',
-        onTap: () => _navigateTo(const AttendScreen()),
-      ),
-      _MenuActionItem(
-        title: 'Pengajuan Izin & Sakit',
-        subtitle: 'Formulir izin tidak hadir atau sakit untuk peserta didik',
-        badgeText: 'Perizinan',
-        badgeColor: const Color(0xFFB45309),
-        icon: Icons.assignment_outlined,
-        iconColor: const Color(0xFFD97706),
-        iconBg: const Color(0xFFFEF3C7),
-        imageAsset: 'assets/images/ic_leave.png',
-        onTap: () => _navigateTo(const AbsentScreen()),
-      ),
-      _MenuActionItem(
-        title: 'Riwayat Presensi',
-        subtitle: 'Daftar catatan kehadiran real-time, pencarian & pengelolaan data',
-        badgeText: 'Realtime',
-        badgeColor: const Color(0xFF4338CA),
-        icon: Icons.history,
-        iconColor: const Color(0xFF4F46E5),
-        iconBg: const Color(0xFFEEF2FF),
-        imageAsset: 'assets/images/ic_history.png',
-        onTap: () => _navigateTo(const AttendanceHistoryScreen()),
-      ),
-    ];
+  Widget _buildRuleRow({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            color: _canvasBg,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, size: 18, color: _cobalt700),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: _manrope(
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w700,
+                  color: _inkText,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: _manrope(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: _slateText,
+                  height: 1.4,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
-      appBar: AppBar(
-        title: const Text('Presensi Digital XI RPL'),
-        actions: [
-          IconButton(
-            tooltip: 'Informasi Sistem',
-            icon: const Icon(Icons.info_outline, size: 22),
-            onPressed: _showSystemInfoDialog,
-          ),
-        ],
-      ),
+      backgroundColor: _canvasBg,
       body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            if (constraints.maxWidth >= 768) {
-              return _buildDesktopLayout();
-            }
-            return _buildMobileLayout();
-          },
-        ),
-      ),
-      bottomNavigationBar: Container(
-        height: 52,
-        decoration: const BoxDecoration(
-          color: _navy,
-          border: Border(
-            top: BorderSide(color: Color(0xFF334155), width: 0.5),
-          ),
-        ),
-        alignment: Alignment.center,
-        child: const Text(
-          'IDN Boarding School Solo • XI Rekayasa Perangkat Lunak',
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: Color(0xFFE2E8F0),
-            letterSpacing: 0.2,
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ==========================================
-  // 1. Layout Mobile (< 768px): Vertikal 1 Kolom
-  // ==========================================
-  Widget _buildMobileLayout() {
-    final menuItems = _buildMenuItems();
-
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 640),
-        child: ListView(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 20.0),
-          children: [
-            _buildIdentityAndProfileBanner(),
-            const SizedBox(height: 14),
-            _buildLiveClockAndStatusCard(),
-            const SizedBox(height: 14),
-            _buildCompactMetricsCard(),
-            const SizedBox(height: 24),
-            const Text(
-              'PILIHAN MENU UTAMA',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.8,
-                color: Color(0xFF475569),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 480),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildHeaderBar(),
+                  const SizedBox(height: 22),
+                  _buildHeroShiftCard(),
+                  const SizedBox(height: 16),
+                  _buildSecondaryBentoGrid(),
+                  const SizedBox(height: 16),
+                  _buildTodayQuickStatusCard(),
+                ],
               ),
             ),
-            const SizedBox(height: 12),
-            for (int i = 0; i < menuItems.length; i++) ...[
-              _ModernMenuCard(item: menuItems[i], isGrid: false),
-              if (i < menuItems.length - 1) const SizedBox(height: 14),
-            ],
-            const SizedBox(height: 28),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ==========================================
-  // 2. Layout Desktop/Tablet (>= 768px): Split Dashboard 2 Kolom
-  // ==========================================
-  Widget _buildDesktopLayout() {
-    final menuItems = _buildMenuItems();
-
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 1180),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 28.0, vertical: 28.0),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Kolom Kiri: Sidebar / Status Panel
-              SizedBox(
-                width: 370,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _buildIdentityAndProfileBanner(),
-                    const SizedBox(height: 16),
-                    _buildLiveClockAndStatusCard(),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 28),
-              // Kolom Kanan: Card Metrik Ringkas + Action Grid 2 Kolom
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _buildCompactMetricsCard(),
-                    const SizedBox(height: 24),
-                    const Text(
-                      'PILIHAN MENU UTAMA',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.8,
-                        color: Color(0xFF475569),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    GridView.builder(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      itemCount: menuItems.length,
-                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 2,
-                        crossAxisSpacing: 16,
-                        mainAxisSpacing: 16,
-                        mainAxisExtent: 175,
-                      ),
-                      itemBuilder: (context, index) {
-                        return _ModernMenuCard(
-                          item: menuItems[index],
-                          isGrid: true,
-                        );
-                      },
-                    ),
-                  ],
-                ),
-              ),
-            ],
           ),
         ),
       ),
@@ -328,500 +334,494 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // ==========================================
-  // Komponen Sidebar: Banner Identitas & Kartu Profil Siswa
+  // A. Header Bar (Clean & Lightweight)
   // ==========================================
-  Widget _buildIdentityAndProfileBanner() {
-    return Container(
-      padding: const EdgeInsets.all(20.0),
-      decoration: BoxDecoration(
-        color: _navy,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFF334155)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(Icons.school_outlined, color: Colors.white, size: 18),
-              ),
-              const SizedBox(width: 10),
-              const Expanded(
-                child: Text(
-                  'IDN BOARDING SCHOOL SOLO',
-                  style: TextStyle(
-                    color: Color(0xFFBFDBFE),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.7,
-                  ),
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.verified, color: Colors.white, size: 14),
-                    SizedBox(width: 4),
-                    Text(
-                      'Aktif',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Text(
-            _getGreeting(),
-            style: const TextStyle(
-              color: Color(0xFF93C5FD),
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
+  Widget _buildHeaderBar() {
+    return Row(
+      children: [
+        Container(
+          width: 46,
+          height: 46,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: const LinearGradient(
+              colors: [_cobalt500, _cobalt700],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
             ),
+            border: Border.all(color: _cobalt50, width: 2),
           ),
-          const SizedBox(height: 4),
-          const Text(
-            'Peserta Didik XI RPL',
-            style: TextStyle(
+          alignment: Alignment.center,
+          child: Text(
+            'XI',
+            style: _manrope(
+              fontSize: 15,
+              fontWeight: FontWeight.w800,
               color: Colors.white,
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
               letterSpacing: -0.3,
             ),
           ),
-          const SizedBox(height: 4),
-          const Text(
-            'Kompetensi Keahlian Rekayasa Perangkat Lunak',
-            style: TextStyle(
-              color: Color(0xFFCBD5E1),
-              fontSize: 12,
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _getGreeting(),
+                style: _manrope(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: _slateText,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Peserta Didik XI RPL',
+                style: _manrope(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                  color: _inkText,
+                  letterSpacing: -0.3,
+                ),
+              ),
+            ],
+          ),
+        ),
+        Material(
+          color: _cardSurface,
+          borderRadius: BorderRadius.circular(14),
+          child: InkWell(
+            onTap: _showAttendanceRulesSheet,
+            borderRadius: BorderRadius.circular(14),
+            child: Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: _cobalt50, width: 1.2),
+              ),
+              child: const Icon(
+                Icons.info_outline_rounded,
+                size: 20,
+                color: _inkText,
+              ),
             ),
           ),
-          const SizedBox(height: 16),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.22),
-              borderRadius: BorderRadius.circular(10),
+        ),
+      ],
+    );
+  }
+
+  // ==========================================
+  // B. The Hero Shift Card ("One Card for the Day")
+  // ==========================================
+  Widget _buildHeroShiftCard() {
+    final shiftStatus = _getShiftStatus();
+
+    return Container(
+      decoration: BoxDecoration(
+        color: _cardSurface,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: _cobalt50, width: 1.2),
+        boxShadow: [
+          BoxShadow(
+            color: _inkText.withValues(alpha: 0.04),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(23),
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                _auroraSky.withValues(alpha: 0.12),
+                _cardSurface,
+                _auroraMint.withValues(alpha: 0.08),
+              ],
+              stops: const [0.0, 0.55, 1.0],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
             ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.calendar_today, size: 14, color: Color(0xFFBFDBFE)),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text(
-                    _getFormattedDate(),
-                    style: const TextStyle(
-                      color: Color(0xFFF1F5F9),
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w600,
+          ),
+          padding: const EdgeInsets.all(22),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 1. Top Status Row
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  // Left Pill: Dynamic attendance status chip
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: shiftStatus.bgTint,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 7,
+                          height: 7,
+                          decoration: BoxDecoration(
+                            color: shiftStatus.dotColor,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          shiftStatus.label,
+                          style: _manrope(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: shiftStatus.textColor,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
-  // ==========================================
-  // Komponen Sidebar: Live Clock Digital & Indikator Status Jam
-  // ==========================================
-  Widget _buildLiveClockAndStatusCard() {
-    final statusCode = _getCurrentStatusCode();
-    final statusLabel = _getCurrentStatusLabel(statusCode);
-    final statusColor = _getCurrentStatusColor(statusCode);
-
-    return Container(
-      padding: const EdgeInsets.all(18.0),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'WAKTU SERVER REALTIME',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.6,
-                  color: Color(0xFF475569),
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: statusColor.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: statusColor.withValues(alpha: 0.45)),
-                ),
-                child: Text(
-                  statusCode.toUpperCase(),
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: statusColor,
+                  // Right Pill: Location badge
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _cardSurface.withValues(alpha: 0.85),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: _cobalt50, width: 1.2),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.location_on_outlined,
+                          size: 14,
+                          color: _slateText,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          'SMK IDN Solo',
+                          style: _manrope(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: _slateText,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
+                ],
+              ),
+
+              const SizedBox(height: 18),
+
+              // 2. Schedule Caption
+              Text(
+                'Batas Tepat Waktu • 08:30 WIB',
+                style: _manrope(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: _slateText,
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.baseline,
-            textBaseline: TextBaseline.alphabetic,
-            children: [
+
+              const SizedBox(height: 6),
+
+              // 3. Massive Realtime Digital Clock
               Text(
                 _getFormattedTime(),
-                style: const TextStyle(
-                  fontSize: 28,
+                style: _manrope(
+                  fontSize: 36,
                   fontWeight: FontWeight.w800,
-                  color: Color(0xFF0F172A),
-                  letterSpacing: 0.5,
+                  color: _inkText,
+                  letterSpacing: -0.8,
+                  height: 1.1,
                 ),
               ),
-              const SizedBox(width: 8),
-              const Text(
-                'WIB',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFF475569),
-                ),
-              ),
-            ],
-          ),
-          const Divider(height: 22, color: Color(0xFFF1F5F9)),
-          Row(
-            children: [
-              Icon(Icons.schedule, size: 16, color: statusColor),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  statusLabel,
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w700,
-                    color: statusColor,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
 
-  // ==========================================
-  // Card Metrik Ringkas (Hari/Tanggal, Batas 08:30 WIB, Instruksi Cepat)
-  // ==========================================
-  Widget _buildCompactMetricsCard() {
-    return Container(
-      padding: const EdgeInsets.all(16.0),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Row(
-            children: [
-              Icon(Icons.analytics_outlined, size: 18, color: _royalBlue),
-              SizedBox(width: 8),
+              const SizedBox(height: 6),
+
               Text(
-                'RINGKASAN & PANDUAN PRESENSI',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.6,
-                  color: Color(0xFF475569),
+                shiftStatus.caption,
+                style: _manrope(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: _slateText,
+                ),
+              ),
+
+              const SizedBox(height: 20),
+
+              // 4. Primary "1-Tap" Action Button
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: ElevatedButton(
+                  onPressed: () => _navigateTo(const AttendScreen()),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _cobalt500,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(horizontal: 18),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.camera_alt_outlined, size: 19),
+                      const SizedBox(width: 10),
+                      Text(
+                        'Check In Kehadiran Sekarang',
+                        style: _manrope(
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      const Icon(Icons.arrow_forward_rounded, size: 18),
+                    ],
+                  ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 12,
-            runSpacing: 10,
-            children: [
-              _MetricPill(
-                icon: Icons.today_outlined,
-                label: 'Hari & Tanggal Aktif',
-                value: _getFormattedDate(),
-              ),
-              const _MetricPill(
-                icon: Icons.access_time_filled,
-                label: 'Batas Tepat Waktu',
-                value: 'Sebelum 08:30 WIB (Lewat = Terlambat)',
-              ),
-              const _MetricPill(
-                icon: Icons.verified_user_outlined,
-                label: 'Instruksi Cepat',
-                value: 'Ambil selfie + pastikan di dalam radius 100m sekolah',
-              ),
-            ],
-          ),
-        ],
+        ),
       ),
     );
   }
-}
 
-class _MetricPill extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String value;
+  // ==========================================
+  // C. Secondary Bento Grid (Balanced 2-Column Row)
+  // ==========================================
+  Widget _buildSecondaryBentoGrid() {
+    return Row(
+      children: [
+        Expanded(
+          child: _BentoActionCard(
+            icon: Icons.edit_calendar_outlined,
+            title: 'Izin / Sakit',
+            subtitle: 'Dispensasi & surat sakit',
+            onTap: () => _navigateTo(const AbsentScreen()),
+          ),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: _BentoActionCard(
+            icon: Icons.bar_chart_rounded,
+            title: 'Riwayat Kelas',
+            subtitle: 'Log & ekspor CSV',
+            onTap: () => _navigateTo(const AttendanceHistoryScreen()),
+          ),
+        ),
+      ],
+    );
+  }
 
-  const _MetricPill({
-    required this.icon,
-    required this.label,
-    required this.value,
-  });
+  // ==========================================
+  // D. Today's Quick Status (Compact Card)
+  // ==========================================
+  Widget _buildTodayQuickStatusCard() {
+    return StreamBuilder<List<AttendanceModel>>(
+      stream: _historyStream,
+      builder: (context, snapshot) {
+        final allItems = snapshot.data ?? const <AttendanceModel>[];
+        final todayItems = allItems
+            .where((item) => _isSameDay(item.createdAt, _now))
+            .toList();
+        final hasSubmittedToday = todayItems.isNotEmpty;
+        final latestToday = hasSubmittedToday ? todayItems.first : null;
 
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 18, color: const Color(0xFF1E2B58)),
-          const SizedBox(width: 10),
-          Flexible(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF475569),
+        final Color badgeBg = hasSubmittedToday
+            ? _successGreen.withValues(alpha: 0.12)
+            : _cobalt50;
+        final Color badgeIconColor =
+            hasSubmittedToday ? _successGreen : _cobalt500;
+        final String statusMessage = hasSubmittedToday
+            ? 'Tercatat hari ini: ${latestToday!.name} (${latestToday.description})'
+            : 'Hari ini belum ada catatan presensi';
+
+        return Material(
+          color: _cardSurface,
+          borderRadius: BorderRadius.circular(24),
+          child: InkWell(
+            onTap: () => _navigateTo(const AttendanceHistoryScreen()),
+            borderRadius: BorderRadius.circular(24),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: _cobalt50, width: 1.2),
+                boxShadow: [
+                  BoxShadow(
+                    color: _inkText.withValues(alpha: 0.04),
+                    blurRadius: 20,
+                    offset: const Offset(0, 8),
                   ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  value,
-                  style: const TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF0F172A),
+                ],
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: badgeBg,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      hasSubmittedToday
+                          ? Icons.check_circle_outline_rounded
+                          : Icons.event_available_outlined,
+                      size: 20,
+                      color: badgeIconColor,
+                    ),
                   ),
-                ),
-              ],
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _getFormattedDate(),
+                          style: _manrope(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: _slateText,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          statusMessage,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: _manrope(
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w700,
+                            color: _inkText,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  const Icon(
+                    Icons.chevron_right_rounded,
+                    size: 20,
+                    color: _slateText,
+                  ),
+                ],
+              ),
             ),
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
 
-class _MenuActionItem {
-  final String title;
-  final String subtitle;
-  final String badgeText;
-  final Color badgeColor;
-  final IconData icon;
-  final Color iconColor;
-  final Color iconBg;
-  final String imageAsset;
-  final VoidCallback onTap;
+class _ShiftStatusInfo {
+  final String label;
+  final Color dotColor;
+  final Color bgTint;
+  final Color textColor;
+  final String caption;
 
-  const _MenuActionItem({
-    required this.title,
-    required this.subtitle,
-    required this.badgeText,
-    required this.badgeColor,
-    required this.icon,
-    required this.iconColor,
-    required this.iconBg,
-    required this.imageAsset,
-    required this.onTap,
+  const _ShiftStatusInfo({
+    required this.label,
+    required this.dotColor,
+    required this.bgTint,
+    required this.textColor,
+    required this.caption,
   });
 }
 
-class _ModernMenuCard extends StatelessWidget {
-  final _MenuActionItem item;
-  final bool isGrid;
+class _BentoActionCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
 
-  const _ModernMenuCard({
-    required this.item,
-    required this.isGrid,
+  const _BentoActionCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(16),
+      color: const Color(0xFFFFFFFF),
+      borderRadius: BorderRadius.circular(24),
       child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: item.onTap,
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(24),
         child: Container(
-          padding: const EdgeInsets.all(16.0),
+          padding: const EdgeInsets.all(18),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFFE2E8F0)),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: const Color(0xFFE8EEFF), width: 1.2),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF0E1A2B).withValues(alpha: 0.04),
+                blurRadius: 20,
+                offset: const Offset(0, 8),
+              ),
+            ],
           ),
-          child: isGrid ? _buildGridContent() : _buildRowContent(),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRowContent() {
-    return Row(
-      children: [
-        _buildIconBox(),
-        const SizedBox(width: 14),
-        Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      item.title,
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF0F172A),
-                      ),
-                    ),
-                  ),
-                  _buildBadge(),
-                ],
+              Container(
+                width: 42,
+                height: 42,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFE8EEFF),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  icon,
+                  size: 20,
+                  color: const Color(0xFF2952F2),
+                ),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 18),
               Text(
-                item.subtitle,
-                style: const TextStyle(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.manrope(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                  color: const Color(0xFF0E1A2B),
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                subtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.manrope(
                   fontSize: 12,
-                  color: Color(0xFF475569),
-                  height: 1.35,
+                  fontWeight: FontWeight.w500,
+                  color: const Color(0xFF5B6474),
                 ),
               ),
             ],
           ),
-        ),
-        const SizedBox(width: 8),
-        const Icon(
-          Icons.arrow_forward_ios,
-          size: 14,
-          color: Color(0xFF64748B),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildGridContent() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            _buildIconBox(),
-            _buildBadge(),
-          ],
-        ),
-        const Spacer(),
-        Text(
-          item.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w700,
-            color: Color(0xFF0F172A),
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          item.subtitle,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            fontSize: 12,
-            color: Color(0xFF475569),
-            height: 1.35,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildIconBox() {
-    return Container(
-      width: 50,
-      height: 50,
-      decoration: BoxDecoration(
-        color: item.iconBg,
-        borderRadius: BorderRadius.circular(14),
-      ),
-      padding: const EdgeInsets.all(8),
-      child: Image.asset(
-        item.imageAsset,
-        fit: BoxFit.contain,
-        errorBuilder: (context, error, stackTrace) => Icon(
-          item.icon,
-          color: item.iconColor,
-          size: 26,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildBadge() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: item.badgeColor.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: item.badgeColor.withValues(alpha: 0.4)),
-      ),
-      child: Text(
-        item.badgeText,
-        style: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w700,
-          color: item.badgeColor,
         ),
       ),
     );
