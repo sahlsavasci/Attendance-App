@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+
+import '../../models/attendance_model.dart';
+import '../../services/attendance_service.dart';
 
 class AttendanceHistoryScreen extends StatefulWidget {
   const AttendanceHistoryScreen({super.key});
@@ -12,23 +14,14 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
   static const _navy = Color(0xFF1E2B58);
   static const _filters = ['Semua', 'Attend', 'Late', 'Izin', 'Sakit'];
 
-  final CollectionReference dataCollection =
-      FirebaseFirestore.instance.collection('attendance');
-
-  // Stream dibuat sekali. Jika dibuat di build(), setiap ketikan di kolom
-  // pencarian akan membuka ulang koneksi Firestore dan daftar berkedip.
-  late final Stream<QuerySnapshot> _attendanceStream;
+  final AttendanceService _attendanceService = AttendanceService();
 
   final TextEditingController searchController = TextEditingController();
   String selectedFilter = 'Semua';
 
-  String get _searchQuery => searchController.text.trim().toLowerCase();
-
   @override
   void initState() {
     super.initState();
-    _attendanceStream = dataCollection.snapshots();
-    // Rebuild saat teks berubah, termasuk saat dikosongkan lewat tombol clear.
     searchController.addListener(_onSearchChanged);
   }
 
@@ -56,7 +49,6 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
     return colors[hash % colors.length];
   }
 
-  // Warna teks status dipilih yang cukup gelap agar terbaca di atas latar pucat.
   Color _getStatusColor(String description) {
     final lower = description.toLowerCase();
     if (lower.contains('attend') || lower.contains('hadir') || lower.contains('tepat')) {
@@ -71,34 +63,6 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
     return const Color(0xFF475569);
   }
 
-  bool _matchesSearch(Map<String, dynamic> data) {
-    if (_searchQuery.isEmpty) return true;
-    final name = (data['name']?.toString() ?? '').toLowerCase();
-    return name.contains(_searchQuery);
-  }
-
-  bool _matchesFilter(Map<String, dynamic> data) {
-    if (selectedFilter == 'Semua') return true;
-
-    final desc = (data['description']?.toString() ?? '').trim().toLowerCase();
-    final isPermission = data['type'] == 'permission';
-
-    switch (selectedFilter) {
-      case 'Attend':
-        return !isPermission &&
-            (desc.contains('attend') || desc.contains('hadir') || desc.contains('tepat'));
-      case 'Late':
-        return !isPermission && (desc.contains('late') || desc.contains('terlambat'));
-      case 'Izin':
-      case 'Sakit':
-        // Keterangan izin berformat "Kategori: alasan". Dicocokkan di awal teks
-        // agar "Sakit: izin ke dokter" tidak ikut masuk filter Izin.
-        return desc.startsWith(selectedFilter.toLowerCase());
-      default:
-        return true;
-    }
-  }
-
   void _showSnackBar(ScaffoldMessengerState messenger, String message) {
     messenger.showSnackBar(
       SnackBar(
@@ -108,11 +72,11 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
     );
   }
 
-  void _showEditDialog(String docId, Map<String, dynamic> currentData) {
-    final nameController = TextEditingController(text: currentData['name']?.toString() ?? '');
-    final addressController = TextEditingController(text: currentData['address']?.toString() ?? '');
-    final descriptionController = TextEditingController(text: currentData['description']?.toString() ?? '');
-    final datetimeController = TextEditingController(text: currentData['datetime']?.toString() ?? '');
+  void _showEditDialog(AttendanceModel item) {
+    final nameController = TextEditingController(text: item.name);
+    final addressController = TextEditingController(text: item.address);
+    final descriptionController = TextEditingController(text: item.description);
+    final datetimeController = TextEditingController(text: item.datetime);
     final messenger = ScaffoldMessenger.of(context);
     var isSaving = false;
 
@@ -128,7 +92,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
               }
               setDialogState(() => isSaving = true);
               try {
-                await dataCollection.doc(docId).update({
+                await _attendanceService.updateAttendance(item.id, {
                   'name': nameController.text.trim(),
                   'address': addressController.text.trim(),
                   'description': descriptionController.text.trim(),
@@ -207,7 +171,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
             Future<void> delete() async {
               setDialogState(() => isDeleting = true);
               try {
-                await dataCollection.doc(docId).delete();
+                await _attendanceService.deleteAttendance(docId);
                 if (dialogContext.mounted) Navigator.pop(dialogContext);
                 _showSnackBar(messenger, 'Data berhasil dihapus dari sistem!');
               } catch (e) {
@@ -323,8 +287,14 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
   }
 
   Widget _buildHistoryList() {
-    return StreamBuilder<QuerySnapshot>(
-      stream: _attendanceStream,
+    final query = searchController.text.trim();
+    final isFiltering = query.isNotEmpty || selectedFilter != 'Semua';
+
+    return StreamBuilder<List<AttendanceModel>>(
+      stream: _attendanceService.streamAttendanceHistory(
+        statusFilter: selectedFilter,
+        searchQuery: query,
+      ),
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           return _buildMessage(
@@ -341,8 +311,23 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
           );
         }
 
-        final docs = List<QueryDocumentSnapshot>.from(snapshot.data!.docs);
-        if (docs.isEmpty) {
+        final items = snapshot.data!;
+        if (items.isEmpty) {
+          if (isFiltering) {
+            return _buildMessage(
+              icon: Icons.search_off,
+              title: 'Tidak ada yang cocok',
+              body: _emptyFilterMessage(),
+              action: TextButton(
+                onPressed: () {
+                  searchController.clear();
+                  setState(() => selectedFilter = 'Semua');
+                },
+                child: const Text('Tampilkan semua catatan'),
+              ),
+            );
+          }
+
           return _buildMessage(
             icon: Icons.inbox_outlined,
             title: 'Belum Ada Catatan Presensi',
@@ -350,49 +335,11 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
           );
         }
 
-        // Urutkan terbaru di atas. Data yang baru dikirim belum punya created_at
-        // dari server, jadi ditaruh paling atas.
-        docs.sort((a, b) {
-          final timeA = (a.data() as Map<String, dynamic>?)?['created_at'] as Timestamp?;
-          final timeB = (b.data() as Map<String, dynamic>?)?['created_at'] as Timestamp?;
-          if (timeA == null && timeB == null) return 0;
-          if (timeA == null) return -1;
-          if (timeB == null) return 1;
-          return timeB.compareTo(timeA);
-        });
-
-        final filteredDocs = docs.where((doc) {
-          final data = doc.data() as Map<String, dynamic>? ?? {};
-          return _matchesSearch(data) && _matchesFilter(data);
-        }).toList();
-
-        if (filteredDocs.isEmpty) {
-          return _buildMessage(
-            icon: Icons.search_off,
-            title: 'Tidak ada yang cocok',
-            body: _emptyFilterMessage(),
-            action: TextButton(
-              onPressed: () {
-                searchController.clear();
-                setState(() => selectedFilter = 'Semua');
-              },
-              child: const Text('Tampilkan semua catatan'),
-            ),
-          );
-        }
-
         return ListView.builder(
           padding: const EdgeInsets.all(16),
-          itemCount: filteredDocs.length,
+          itemCount: items.length,
           itemBuilder: (context, index) {
-            final doc = filteredDocs[index];
-            final data = doc.data() as Map<String, dynamic>? ?? {};
-            final name = data['name']?.toString() ?? 'Siswa';
-            final address = data['address']?.toString() ?? '-';
-            final description = data['description']?.toString() ?? '-';
-            final datetime = data['datetime']?.toString() ?? '-';
-
-            return _buildAttendanceCard(doc.id, name, address, description, datetime, data);
+            return _buildAttendanceCard(items[index]);
           },
         );
       },
@@ -446,15 +393,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
     );
   }
 
-  Widget _buildAttendanceCard(
-    String docId,
-    String name,
-    String address,
-    String description,
-    String datetime,
-    Map<String, dynamic> rawData,
-  ) {
-    final statusColor = _getStatusColor(description);
+  Widget _buildAttendanceCard(AttendanceModel item) {
+    final statusColor = _getStatusColor(item.description);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -473,9 +413,9 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
               children: [
                 CircleAvatar(
                   radius: 20,
-                  backgroundColor: _getAvatarColor(name),
+                  backgroundColor: _getAvatarColor(item.name),
                   child: Text(
-                    name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : '?',
+                    item.name.trim().isNotEmpty ? item.name.trim()[0].toUpperCase() : '?',
                     style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
                   ),
                 ),
@@ -485,7 +425,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        name,
+                        item.name,
                         style: const TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w700,
@@ -501,7 +441,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                           border: Border.all(color: statusColor.withValues(alpha: 0.4)),
                         ),
                         child: Text(
-                          description,
+                          item.description,
                           style: TextStyle(
                             color: statusColor,
                             fontWeight: FontWeight.w700,
@@ -518,12 +458,12 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                     IconButton(
                       tooltip: 'Edit Presensi',
                       icon: const Icon(Icons.edit_outlined, color: Color(0xFF1D4ED8), size: 20),
-                      onPressed: () => _showEditDialog(docId, rawData),
+                      onPressed: () => _showEditDialog(item),
                     ),
                     IconButton(
                       tooltip: 'Hapus Presensi',
                       icon: const Icon(Icons.delete_outline, color: Color(0xFFB91C1C), size: 20),
-                      onPressed: () => _showDeleteDialog(docId),
+                      onPressed: () => _showDeleteDialog(item.id),
                     ),
                   ],
                 ),
@@ -536,13 +476,13 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    datetime,
+                    item.datetime,
                     style: const TextStyle(color: Color(0xFF334155), fontSize: 12, fontWeight: FontWeight.w500),
                   ),
                 ),
               ],
             ),
-            if (address != '-' && address.isNotEmpty) ...[
+            if (item.address != '-' && item.address.isNotEmpty) ...[
               const SizedBox(height: 6),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -551,7 +491,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      address,
+                      item.address,
                       style: const TextStyle(color: Color(0xFF475569), fontSize: 12),
                     ),
                   ),

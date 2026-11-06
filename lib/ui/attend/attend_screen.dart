@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
+
+import '../../models/attendance_model.dart';
+import '../../services/attendance_service.dart';
 
 class AttendScreen extends StatefulWidget {
   final XFile? image;
@@ -16,11 +18,19 @@ class AttendScreen extends StatefulWidget {
 }
 
 class _AttendScreenState extends State<AttendScreen> {
-  // Variabel Lokasi
+  // Titik Koordinat Target: SMK IDN Boarding School Solo
+  static const double schoolLat = -7.5255;
+  static const double schoolLng = 110.8710;
+  static const double maxAllowedDistanceMeters = 100.0;
+
+  // Variabel Lokasi & Geofencing
   bool isLoadingLocation = false;
   bool isSubmitting = false;
   double dLat = 0.0;
   double dLong = 0.0;
+  double? distanceInMeters;
+  bool isWithinRadius = false;
+  bool isWebTestingBypass = false;
   String strAlamat = 'Mencari lokasi GPS...';
 
   // Variabel Foto
@@ -34,9 +44,11 @@ class _AttendScreenState extends State<AttendScreen> {
   // Controller untuk input nama
   final TextEditingController nameController = TextEditingController();
 
-  // Koneksi ke Koleksi Firestore
-  final CollectionReference dataCollection =
-      FirebaseFirestore.instance.collection('attendance');
+  // Service Layer untuk interaksi Firestore
+  final AttendanceService _attendanceService = AttendanceService();
+
+  bool get _canSubmitAttendance =>
+      isWithinRadius || (kIsWeb && isWebTestingBypass);
 
   @override
   void initState() {
@@ -119,9 +131,17 @@ class _AttendScreenState extends State<AttendScreen> {
   }
 
   // ==========================================
-  // 3. Pengiriman Payload ke Cloud Firestore
+  // 3. Pengiriman Payload melalui AttendanceService
   // ==========================================
   Future<void> submitAbsen(String alamat, String nama, String status) async {
+    if (!_canSubmitAttendance) {
+      _showSnackBar(
+        'Presensi ditolak: Anda berada di luar area sekolah!',
+        Icons.location_off_outlined,
+      );
+      return;
+    }
+
     if (capturedImage == null) {
       _showSnackBar('Silakan ambil foto selfie terlebih dahulu!', Icons.warning_amber_rounded);
       return;
@@ -136,17 +156,20 @@ class _AttendScreenState extends State<AttendScreen> {
     setState(() => isSubmitting = true);
     _showLoaderDialog();
 
+    final attendance = AttendanceModel(
+      id: '',
+      name: trimmedName,
+      description: status,
+      address: alamat.isEmpty ? 'Lokasi tidak terekam' : alamat,
+      datetime: strDateTime,
+      type: 'attendance',
+      latitude: dLat,
+      longitude: dLong,
+      createdAt: DateTime.now(),
+    );
+
     try {
-      await dataCollection.add({
-        'name': trimmedName,
-        'address': alamat.isEmpty ? 'Lokasi tidak terekam' : alamat,
-        'description': status,
-        'datetime': strDateTime,
-        'latitude': dLat,
-        'longitude': dLong,
-        'type': 'attendance',
-        'created_at': FieldValue.serverTimestamp(),
-      });
+      await _attendanceService.recordAttendance(attendance);
 
       if (!mounted) return;
       Navigator.of(context, rootNavigator: true).pop(); // Tutup Loader Dialog
@@ -209,8 +232,55 @@ class _AttendScreenState extends State<AttendScreen> {
   }
 
   // ==========================================
-  // 4. Penanganan Lokasi GPS (Aman untuk Web & Mobile)
+  // 4. Penanganan Lokasi GPS & Validasi Geofencing
   // ==========================================
+  void _evaluateGeofence(double lat, double lng, {double? accuracy}) {
+    final distance = Geolocator.distanceBetween(
+      lat,
+      lng,
+      schoolLat,
+      schoolLng,
+    );
+    final within = distance <= maxAllowedDistanceMeters;
+
+    // Pada platform Web, lokasi berbasis IP/Wi-Fi sering kali memiliki akurasi rendah (>100m).
+    // Aktifkan mode graceful testing secara otomatis di Web jika akurasi tidak presisi,
+    // atau tampilkan opsi simulasi agar tidak memblokir pengujian di laptop.
+    final lowAccuracyWeb = kIsWeb && (accuracy == null || accuracy > 100);
+
+    setState(() {
+      distanceInMeters = distance;
+      isWithinRadius = within;
+      if (lowAccuracyWeb && !within) {
+        isWebTestingBypass = true;
+      }
+    });
+
+    if (!within && !isWebTestingBypass && mounted) {
+      _showSnackBar(
+        'Presensi ditolak: Anda berada di luar area sekolah!',
+        Icons.warning_amber_rounded,
+      );
+    }
+  }
+
+  void _useSchoolCoordinatesForWebTesting() {
+    dLat = schoolLat;
+    dLong = schoolLng;
+    setState(() {
+      distanceInMeters = 0.0;
+      isWithinRadius = true;
+      isWebTestingBypass = true;
+      strAlamat =
+          'Koordinat Simulasi Sekolah: Lat ${schoolLat.toStringAsFixed(5)}, Long ${schoolLng.toStringAsFixed(5)} (Web Testing)';
+      isLoadingLocation = false;
+    });
+    _showSnackBar(
+      'Titik lokasi disetel ke area SMK IDN Boarding School Solo (0 meter).',
+      Icons.check_circle_outline,
+    );
+  }
+
   Future<bool> handleLocationPermission() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled && !kIsWeb) {
@@ -245,6 +315,11 @@ class _AttendScreenState extends State<AttendScreen> {
   Future<void> getGeoLocationPosition() async {
     final hasPermission = await handleLocationPermission();
     if (!hasPermission) {
+      if (kIsWeb) {
+        // Fallback graceful untuk Web saat izin lokasi tidak tersedia di browser testing
+        _useSchoolCoordinatesForWebTesting();
+        return;
+      }
       setState(() {
         strAlamat = 'Izin lokasi tidak diberikan.';
         isLoadingLocation = false;
@@ -264,16 +339,24 @@ class _AttendScreenState extends State<AttendScreen> {
       dLat = position.latitude;
       dLong = position.longitude;
 
+      _evaluateGeofence(
+        position.latitude,
+        position.longitude,
+        accuracy: position.accuracy,
+      );
       await getAddressFromLongLat(position);
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          strAlamat = dLat != 0.0
-              ? 'Koordinat: ${dLat.toStringAsFixed(5)}, ${dLong.toStringAsFixed(5)}'
-              : 'Gagal mendeteksi lokasi: $e';
-          isLoadingLocation = false;
-        });
+      if (!mounted) return;
+      if (kIsWeb) {
+        _useSchoolCoordinatesForWebTesting();
+        return;
       }
+      setState(() {
+        strAlamat = dLat != 0.0
+            ? 'Koordinat: ${dLat.toStringAsFixed(5)}, ${dLong.toStringAsFixed(5)}'
+            : 'Gagal mendeteksi lokasi: $e';
+        isLoadingLocation = false;
+      });
     }
   }
 
@@ -348,6 +431,130 @@ class _AttendScreenState extends State<AttendScreen> {
       default:
         return 'Di Luar Jam Operasional (Leave)';
     }
+  }
+
+  String _formatDistanceText(double meters) {
+    final rounded = meters.round();
+    if (isWithinRadius) {
+      return 'Jarak ke sekolah: $rounded meter - Dalam Radius';
+    }
+    return 'Jarak: $rounded meter - Di Luar Radius';
+  }
+
+  Widget _buildGeofenceBadge() {
+    if (isLoadingLocation) {
+      return const Padding(
+        padding: EdgeInsets.only(top: 10),
+        child: Text(
+          'Menghitung jarak ke sekolah...',
+          style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+        ),
+      );
+    }
+
+    if (distanceInMeters == null) {
+      return const SizedBox.shrink();
+    }
+
+    final Color badgeColor = isWithinRadius
+        ? const Color(0xFF047857) // Hijau
+        : const Color(0xFFB91C1C); // Merah
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 12),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: badgeColor.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: badgeColor.withValues(alpha: 0.45)),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                isWithinRadius ? Icons.verified_outlined : Icons.gpp_bad_outlined,
+                size: 18,
+                color: badgeColor,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _formatDistanceText(distanceInMeters!),
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: badgeColor,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (!isWithinRadius && !kIsWeb) ...[
+          const SizedBox(height: 8),
+          const Text(
+            'Presensi ditolak: Anda berada di luar area sekolah! (Maksimal radius 100 meter)',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFFB91C1C),
+            ),
+          ),
+        ],
+        if (kIsWeb && !isWithinRadius) ...[
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFFBEB),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFFDE68A)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'GPS Web Browser menggunakan estimasi jaringan yang kurang presisi. Mode pengujian Web diaktifkan agar presensi tetap dapat diuji.',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: Color(0xFF92400E),
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    TextButton.icon(
+                      onPressed: _useSchoolCoordinatesForWebTesting,
+                      icon: const Icon(Icons.my_location, size: 15),
+                      label: const Text(
+                        'Simulasikan Titik Sekolah (0m)',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                      style: TextButton.styleFrom(
+                        foregroundColor: const Color(0xFF1E2B58),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                    const Spacer(),
+                    Switch(
+                      value: isWebTestingBypass,
+                      activeThumbColor: const Color(0xFF1E2B58),
+                      onChanged: (val) => setState(() => isWebTestingBypass = val),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
   }
 
   @override
@@ -520,7 +727,7 @@ class _AttendScreenState extends State<AttendScreen> {
 
                 const SizedBox(height: 16),
 
-                // 3. Card Lokasi GPS dengan Tombol Refresh
+                // 3. Card Lokasi GPS & Geofencing dengan Tombol Refresh
                 Container(
                   padding: const EdgeInsets.all(16.0),
                   decoration: BoxDecoration(
@@ -570,6 +777,7 @@ class _AttendScreenState extends State<AttendScreen> {
                           height: 1.4,
                         ),
                       ),
+                      _buildGeofenceBadge(),
                     ],
                   ),
                 ),
@@ -589,19 +797,23 @@ class _AttendScreenState extends State<AttendScreen> {
 
                 const SizedBox(height: 28),
 
-                // 5. Tombol Submit Presensi
+                // 5. Tombol Submit Presensi (Diproteksi Geofencing)
                 ElevatedButton(
-                  onPressed: (isLoadingLocation || isSubmitting)
+                  onPressed: (isLoadingLocation || isSubmitting || !_canSubmitAttendance)
                       ? null
                       : () => submitAbsen(strAlamat, nameController.text, strStatus),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF1E2B58),
+                    disabledBackgroundColor: const Color(0xFFCBD5E1),
+                    disabledForegroundColor: const Color(0xFF64748B),
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
-                  child: const Text(
-                    'KIRIM PRESENSI KEHADIRAN',
-                    style: TextStyle(
+                  child: Text(
+                    _canSubmitAttendance
+                        ? 'KIRIM PRESENSI KEHADIRAN'
+                        : 'DI LUAR RADIUS SEKOLAH (> 100M)',
+                    style: const TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w700,
                       letterSpacing: 0.3,

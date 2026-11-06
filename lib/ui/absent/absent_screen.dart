@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+
+import '../../models/attendance_model.dart';
+import '../../services/attendance_service.dart';
 
 class AbsentScreen extends StatefulWidget {
   const AbsentScreen({super.key});
@@ -21,8 +23,7 @@ class _AbsentScreenState extends State<AbsentScreen> {
 
   bool _isLoading = false;
 
-  final CollectionReference dataCollection =
-      FirebaseFirestore.instance.collection('attendance');
+  final AttendanceService _attendanceService = AttendanceService();
 
   @override
   void initState() {
@@ -97,19 +98,19 @@ class _AbsentScreenState extends State<AbsentScreen> {
         ? '$_selectedCategory: $reason'
         : _selectedCategory;
 
+    final permission = AttendanceModel(
+      id: '',
+      name: name,
+      description: descriptionText,
+      address: '-',
+      datetime: dateRangeStr,
+      type: 'permission',
+      reason: reason,
+      createdAt: DateTime.now(),
+    );
+
     try {
-      await dataCollection.add({
-        'name': name,
-        'address': '-',
-        'description': descriptionText,
-        'datetime': dateRangeStr,
-        'type': 'permission',
-        'category': _selectedCategory,
-        'reason': _reasonController.text.trim(),
-        'start_date': Timestamp.fromDate(_startDate!),
-        'end_date': Timestamp.fromDate(_endDate!),
-        'created_at': FieldValue.serverTimestamp(),
-      });
+      await _attendanceService.submitPermission(permission);
 
       if (!mounted) return;
       _showSnackBar('Pengajuan izin berhasil tersimpan!', Icons.check_circle_outline);
