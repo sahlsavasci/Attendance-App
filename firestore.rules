@@ -1,9 +1,49 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    function isNonEmptyString(value, maxLen) {
+      return value is string
+        && value.size() > 0
+        && value.size() <= maxLen;
+    }
+
+    function isValidAttendanceCreate(data) {
+      return data.keys().hasAll(['name', 'description', 'datetime', 'type'])
+        && isNonEmptyString(data.name, 100)
+        && isNonEmptyString(data.description, 300)
+        && isNonEmptyString(data.datetime, 100)
+        && (data.type == 'attendance' || data.type == 'permission')
+        && (!('address' in data) || (data.address is string && data.address.size() <= 500))
+        && (!('reason' in data) || (data.reason is string && data.reason.size() <= 500))
+        && (!('latitude' in data) || data.latitude is number)
+        && (!('longitude' in data) || data.longitude is number);
+    }
+
+    function isValidAttendanceUpdate(newData, oldData) {
+      // Sanitasi input pada saat update: wajib mempertahankan type asli dan field utama tidak boleh kosong
+      return newData.type == oldData.type
+        && isNonEmptyString(newData.name, 100)
+        && isNonEmptyString(newData.description, 300)
+        && isNonEmptyString(newData.datetime, 100)
+        && (!('address' in newData) || (newData.address is string && newData.address.size() <= 500));
+    }
+
     match /attendance/{document} {
-      allow read, write: if true; // Mode belajar sekolah
+      // 1. Baca data (read): diizinkan untuk semua client
+      allow read: if true;
+
+      // 2. Buat data (create): wajib memiliki name, description, datetime, dan type ('attendance' atau 'permission')
+      allow create: if isValidAttendanceCreate(request.resource.data);
+
+      // 3. Update & Delete:
+      // - Update diizinkan hanya jika lolos sanitasi input atau user terotentikasi
+      // - Delete dibatasi untuk user terotentikasi atau dokumen dengan struktur valid
+      allow update: if request.auth != null
+        || isValidAttendanceUpdate(request.resource.data, resource.data);
+
+      allow delete: if request.auth != null
+        || (resource.data.type in ['attendance', 'permission']);
     }
   }
 }
-

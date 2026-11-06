@@ -1,7 +1,9 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../models/attendance_model.dart';
 import '../../services/attendance_service.dart';
+import '../../utils/csv_exporter/csv_exporter.dart';
 
 class AttendanceHistoryScreen extends StatefulWidget {
   const AttendanceHistoryScreen({super.key});
@@ -13,11 +15,15 @@ class AttendanceHistoryScreen extends StatefulWidget {
 class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
   static const _navy = Color(0xFF1E2B58);
   static const _filters = ['Semua', 'Attend', 'Late', 'Izin', 'Sakit'];
+  static const _csvFileName = 'rekap_presensi_XI_RPL.csv';
 
   final AttendanceService _attendanceService = AttendanceService();
 
   final TextEditingController searchController = TextEditingController();
   String selectedFilter = 'Semua';
+
+  List<AttendanceModel> _currentItems = [];
+  bool _isExporting = false;
 
   @override
   void initState() {
@@ -32,6 +38,70 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
     searchController.removeListener(_onSearchChanged);
     searchController.dispose();
     super.dispose();
+  }
+
+  String _escapeCsvField(String value) {
+    final cleaned = value.replaceAll('\r\n', ' ').replaceAll('\n', ' ').trim();
+    if (cleaned.contains(',') || cleaned.contains('"')) {
+      final escapedQuotes = cleaned.replaceAll('"', '""');
+      return '"$escapedQuotes"';
+    }
+    return cleaned;
+  }
+
+  String _buildCsvString(List<AttendanceModel> data) {
+    final buffer = StringBuffer();
+    buffer.writeln('Nama,Status,Tanggal/Waktu,Alamat,Alasan');
+
+    for (final item in data) {
+      final row = [
+        _escapeCsvField(item.name),
+        _escapeCsvField(item.description),
+        _escapeCsvField(item.datetime),
+        _escapeCsvField(item.address),
+        _escapeCsvField(item.reason ?? '-'),
+      ].join(',');
+      buffer.writeln(row);
+    }
+
+    return buffer.toString();
+  }
+
+  Future<void> exportAttendanceToCsv(List<AttendanceModel> data) async {
+    final messenger = ScaffoldMessenger.of(context);
+    if (data.isEmpty) {
+      _showSnackBar(
+        messenger,
+        'Belum ada data presensi untuk diekspor ke CSV.',
+      );
+      return;
+    }
+
+    setState(() => _isExporting = true);
+    try {
+      final csvContent = _buildCsvString(data);
+      final savedLocation = await downloadCsvFile(csvContent, _csvFileName);
+      if (!mounted) return;
+
+      if (kIsWeb) {
+        _showSnackBar(
+          messenger,
+          'Berhasil mengunduh $_csvFileName (${data.length} baris).',
+        );
+      } else {
+        _showSnackBar(
+          messenger,
+          'CSV disimpan di: $savedLocation & disalin ke Clipboard (${data.length} baris).',
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _showSnackBar(messenger, 'Gagal mengekspor CSV: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isExporting = false);
+      }
+    }
   }
 
   Color _getAvatarColor(String name) {
@@ -211,6 +281,24 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
       backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
         title: const Text('Riwayat Presensi Siswa'),
+        actions: [
+          IconButton(
+            tooltip: 'Ekspor ke CSV ($_csvFileName)',
+            icon: _isExporting
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      color: Colors.white,
+                      strokeWidth: 2,
+                    ),
+                  )
+                : const Icon(Icons.download),
+            onPressed: _isExporting
+                ? null
+                : () => exportAttendanceToCsv(_currentItems),
+          ),
+        ],
       ),
       body: Center(
         child: ConstrainedBox(
@@ -312,6 +400,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
         }
 
         final items = snapshot.data!;
+        _currentItems = items;
+
         if (items.isEmpty) {
           if (isFiltering) {
             return _buildMessage(
